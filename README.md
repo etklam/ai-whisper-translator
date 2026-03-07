@@ -21,7 +21,13 @@ Use this README for first-time setup and your first successful translation. For 
 Optional:
 - `tkinterdnd2` for drag-and-drop support (already included in `requirements.txt`)
 
-## Install
+## Install (Recommended: uv)
+
+```bash
+uv sync
+```
+
+Fallback (pip + requirements.txt):
 
 ```bash
 pip install -r requirements.txt
@@ -37,6 +43,14 @@ ollama pull gpt-oss:20b
 You can use a different model if it supports Ollama's chat completions API.
 
 ## Run the App
+
+Recommended:
+
+```bash
+uv run python main.py
+```
+
+Fallback:
 
 ```bash
 python main.py
@@ -72,7 +86,8 @@ python main.py
   - Verify Ollama endpoint is reachable at `http://localhost:11434`.
   - Try a smaller model or lower parallel requests.
 - Drag-and-drop does not work:
-  - Reinstall dependencies: `pip install -r requirements.txt`.
+  - Reinstall dependencies: `uv sync --reinstall`.
+  - Fallback reinstall: `pip install -r requirements.txt`.
 
 ## Documentation
 

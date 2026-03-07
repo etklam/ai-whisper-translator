@@ -9,6 +9,9 @@ This document is for maintainers and contributors.
 - GUI is implemented in [`src/gui/app.py`](../src/gui/app.py).
 - Domain/application/infrastructure layering exists and is partially integrated.
 - TypeScript files under `src/*.ts` are scaffolding and are not part of the current runtime path.
+- Package management now supports uv-first workflow with pip compatibility:
+  - `pyproject.toml` + `uv.lock` for uv sync/run
+  - `requirements.txt` preserved for pip-based installs
 
 ## 2. Runtime Architecture
 
@@ -98,7 +101,13 @@ High-level flow:
 
 Current tests are primarily unit tests for application/domain/infrastructure behavior.
 
-Run full suite:
+Recommended (uv):
+
+```bash
+uv run pytest -v
+```
+
+Fallback (pip environment):
 
 ```bash
 $env:PYTHONPATH='.'; pytest -v

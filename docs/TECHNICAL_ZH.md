@@ -9,6 +9,9 @@
 - GUI 主要在 [`src/gui/app.py`](../src/gui/app.py)。
 - 專案已具備 application/domain/infrastructure 分層，但仍在整合期。
 - `src/*.ts` 的 TypeScript 檔目前為草稿骨架，未接入現行執行流程。
+- 套件管理已支援 uv 優先且保留 pip 相容：
+  - `pyproject.toml` + `uv.lock` 供 uv 同步與執行
+  - `requirements.txt` 保留給 pip 安裝路徑
 
 ## 2. 執行期架構
 
@@ -98,7 +101,13 @@
 
 目前測試以 application/domain/infrastructure 單元測試為主。
 
-執行全部測試：
+建議（uv）：
+
+```bash
+uv run pytest -v
+```
+
+相容備援（pip 環境）：
 
 ```bash
 $env:PYTHONPATH='.'; pytest -v

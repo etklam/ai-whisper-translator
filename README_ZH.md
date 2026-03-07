@@ -21,7 +21,13 @@
 可選：
 - `tkinterdnd2`（拖放功能；`requirements.txt` 已包含）
 
-## 安裝
+## 安裝（建議：uv）
+
+```bash
+uv sync
+```
+
+相容備援（pip + requirements.txt）：
 
 ```bash
 pip install -r requirements.txt
@@ -37,6 +43,14 @@ ollama pull gpt-oss:20b
 若你已有其他相容於 Ollama chat completions API 的模型，也可以直接使用。
 
 ## 啟動程式
+
+建議：
+
+```bash
+uv run python main.py
+```
+
+相容備援：
 
 ```bash
 python main.py
@@ -72,7 +86,8 @@ python main.py
   - 檢查是否可連到 `http://localhost:11434`。
   - 降低並行數或改用較小模型再試。
 - 拖放無法使用：
-  - 重新安裝依賴：`pip install -r requirements.txt`。
+  - 重新同步依賴：`uv sync --reinstall`。
+  - 相容備援重裝：`pip install -r requirements.txt`。
 
 ## 延伸文件
 
