@@ -71,6 +71,12 @@
 
 - Ollama 端點（預設）：`http://localhost:11434/v1/chat/completions`
 - 主程序環境變數：`main.py` 內設定 `OLLAMA_NUM_PARALLEL=5`
+- Develop mode 日誌觸發條件：
+  - `APP_ENV=development`（不分大小寫），或
+  - `APP_DEBUG=1`
+- 日誌等級：
+  - develop mode：`DEBUG`
+  - 預設模式：`INFO`
 - UI 預設並行數：`10`
 - `TranslationRequest.max_retries` 預設：`1`
 - 提示詞檔案：`src/translation/prompts.json`

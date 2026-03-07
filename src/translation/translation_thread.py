@@ -1,6 +1,7 @@
 import threading
 import asyncio
 import os
+import logging
 import pysrt
 from queue import Queue
 
@@ -8,6 +9,8 @@ from src.utils.file_utils import ensure_backup_dir, get_output_path
 from src.domain.errors import ExternalServiceError
 from src.infrastructure.prompt.json_prompt_provider import JsonPromptProvider
 from src.infrastructure.translation.ollama_translation_client import OllamaTranslationClient
+
+logger = logging.getLogger(__name__)
 
 class TranslationThread(threading.Thread):
     def __init__(self, file_path, source_lang, target_lang, model_name, parallel_requests, progress_callback, complete_callback, debug_mode=False, replace_original=False, use_alt_prompt=False, prompt_provider=None, translation_client=None, coordinator=None):
@@ -30,6 +33,15 @@ class TranslationThread(threading.Thread):
             "http://localhost:11434/v1/chat/completions"
         )
         self.coordinator = coordinator
+        logger.debug(
+            "TranslationThread initialized file=%s source_lang=%s target_lang=%s model=%s parallel=%s replace_original=%s",
+            file_path,
+            source_lang,
+            target_lang,
+            model_name,
+            parallel_requests,
+            replace_original,
+        )
 
     def set_app(self, app):
         """設置對 App 實例的引用"""
@@ -39,6 +51,12 @@ class TranslationThread(threading.Thread):
         subs = pysrt.open(self.file_path)
         total_subs = len(subs)
         batch_size = int(self.parallel_requests)
+        logger.info(
+            "Thread translation started file=%s subtitle_count=%s batch_size=%s",
+            self.file_path,
+            total_subs,
+            batch_size,
+        )
 
         # 如果是取代原始檔案模式，先創建備份
         if self.replace_original:
@@ -48,7 +66,9 @@ class TranslationThread(threading.Thread):
                 backup_file = os.path.join(backup_path, os.path.basename(self.file_path))
                 import shutil
                 shutil.copy2(self.file_path, backup_file)
+                logger.debug("Original file backed up source=%s backup=%s", self.file_path, backup_file)
             except Exception as e:
+                logger.warning("Backup creation failed file=%s error=%s", self.file_path, e)
                 self.complete_callback(f"警告：無法創建備份檔案：{str(e)}")
 
         loop = asyncio.new_event_loop()
@@ -57,6 +77,7 @@ class TranslationThread(threading.Thread):
         for i in range(0, total_subs, batch_size):
             batch = subs[i:i+batch_size]
             texts = [sub.text for sub in batch]
+            logger.debug("Translating batch start=%s end=%s size=%s", i, i + len(batch), len(batch))
             results = loop.run_until_complete(self.translate_batch_async(texts))
             
             for sub, result in zip(batch, results):
@@ -68,14 +89,17 @@ class TranslationThread(threading.Thread):
                     sub.text = result
                 
             self.progress_callback(min(i+batch_size, total_subs), total_subs)
+            logger.debug("Batch translation progress current=%s total=%s", min(i+batch_size, total_subs), total_subs)
 
         loop.close()
 
         output_path = self.get_output_path()
         if output_path:  # 只有在有效的輸出路徑時才保存
             subs.save(output_path, encoding='utf-8')
+            logger.info("Thread translation completed file=%s output=%s", self.file_path, output_path)
             self.complete_callback(f"翻譯完成 | 檔案已成功保存為: {output_path}")
         else:
+            logger.info("Thread translation skipped file=%s", self.file_path)
             self.complete_callback(f"已跳過檔案: {self.file_path}")
 
     async def translate_batch_async(self, texts):
@@ -91,11 +115,14 @@ class TranslationThread(threading.Thread):
                 model_name=self.model_name,
                 system_prompt=self._get_system_prompt(),
             )
-        except ExternalServiceError:
+        except ExternalServiceError as exc:
+            logger.warning("Batch subtitle translation failed file=%s error=%s", self.file_path, exc)
             return None
 
     def _get_system_prompt(self):
-        return self.prompt_provider.get_prompt(use_alt_prompt=self.use_alt_prompt)
+        prompt = self.prompt_provider.get_prompt(use_alt_prompt=self.use_alt_prompt)
+        logger.debug("Resolved system prompt len=%s use_alt_prompt=%s", len(prompt), self.use_alt_prompt)
+        return prompt
 
 
     def get_output_path(self):
@@ -105,7 +132,9 @@ class TranslationThread(threading.Thread):
         # 檢查檔案是否存在
         if os.path.exists(base_path) and not self.replace_original:
             # 發送訊息到主線程處理檔案衝突
+            logger.debug("Output conflict detected path=%s", base_path)
             response = self.handle_file_conflict(base_path)
+            logger.debug("Conflict response=%s path=%s", response, base_path)
             if response == "rename":
                 # 自動重新命名，加上數字後綴
                 dir_name, file_name = os.path.split(self.file_path)
@@ -117,12 +146,15 @@ class TranslationThread(threading.Thread):
                 while True:
                     new_path = os.path.join(dir_name, f"{name}{lang_suffix}_{counter}{ext}")
                     if not os.path.exists(new_path):
+                        logger.debug("Conflict resolved with rename path=%s", new_path)
                         return new_path
                     counter += 1
             elif response == "skip":
+                logger.debug("Conflict resolved with skip path=%s", base_path)
                 return None
             # response == "overwrite" 則使用原始路徑
         
+        logger.debug("Output path selected path=%s", base_path)
         return base_path
 
     def handle_file_conflict(self, file_path):
@@ -138,4 +170,6 @@ class TranslationThread(threading.Thread):
         })
         
         # 等待使用者回應
-        return queue.get()
+        result = queue.get()
+        logger.debug("Conflict dialog result=%s path=%s", result, file_path)
+        return result

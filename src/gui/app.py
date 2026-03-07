@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, Menu
 import os
 import sys
+import logging
 from queue import Queue
 
 from src.utils.file_utils import ensure_backup_dir, clean_srt_file
@@ -16,11 +17,14 @@ except ImportError:
 
 from src.translation.translation_thread import TranslationThread
 
+logger = logging.getLogger(__name__)
+
 class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
     def __init__(self, coordinator=None):
         super().__init__()
         self.countdown_window = None
         self.coordinator = coordinator
+        logger.debug("App initialized coordinator_present=%s tkdnd_available=%s", bool(coordinator), TKDND_AVAILABLE)
         
         # 初始化語言設定
         self.current_language = tk.StringVar(value="zh_tw")  # 預設使用繁體中文
@@ -128,6 +132,7 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
         current = self.current_language.get()
         new_language = "en" if current == "zh_tw" else "zh_tw"
         self.current_language.set(new_language)
+        logger.debug("UI language switched from=%s to=%s", current, new_language)
         self.update_ui_language()
 
     def update_ui_language(self):
@@ -356,17 +361,24 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
     def handle_drop(self, event):
         """處理檔案拖放"""
         files = self.tk.splitlist(event.data)
+        logger.debug("Handle drop received count=%s", len(files))
+        added = 0
+        skipped = 0
         for file in files:
             # 檢查是否為 .srt 檔案
             if file.lower().endswith('.srt'):
                 # 在 Windows 上移除檔案路徑的大括號（如果有的話）
                 file = file.strip('{}')
                 self.file_list.insert(tk.END, file)
+                added += 1
             else:
+                skipped += 1
                 messagebox.showwarning("警告", f"檔案 {file} 不是 SRT 格式，已略過")
+        logger.debug("Handle drop completed added=%s skipped=%s", added, skipped)
 
     def select_files(self):
         files = filedialog.askopenfilenames(filetypes=[("SRT files", "*.srt")])
+        logger.debug("File picker selected count=%s", len(files))
         for file in files:
             self.file_list.insert(tk.END, file)
 
@@ -374,7 +386,9 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
         """選擇文件夾並批量添加 SRT 檔案"""
         folder_path = filedialog.askdirectory(title="選擇包含 SRT 檔案的文件夾")
         if not folder_path:
+            logger.debug("Folder selection cancelled")
             return
+        logger.debug("Folder selection started path=%s", folder_path)
 
         # 計數器
         added_count = 0
@@ -424,23 +438,36 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
             messagebox.showinfo("完成", message)
         else:
             messagebox.showwarning("提示", "未找到可添加的 SRT 檔案")
+        logger.debug(
+            "Folder selection completed path=%s added=%s skipped=%s backup_skipped=%s",
+            folder_path,
+            added_count,
+            skipped_count,
+            backup_count,
+        )
 
     def get_model_list(self):
         import urllib.request
         import json
         url = "http://localhost:11434/v1/models"
+        logger.debug("Fetching model list from endpoint=%s", url)
         try:
             with urllib.request.urlopen(url) as response:
                 models = json.loads(response.read())
                 if 'data' in models and isinstance(models['data'], list):
-                    return [model['id'] for model in models['data']]
-        except Exception:
+                    model_ids = [model['id'] for model in models['data']]
+                    logger.debug("Fetched model list count=%s", len(model_ids))
+                    return model_ids
+        except Exception as exc:
+            logger.warning("Failed to fetch model list error=%s", exc)
             pass
         return []
 
     def start_translation(self):
         """開始翻譯"""
+        logger.info("Start translation requested files=%s", self.file_list.size())
         if not self.file_list.size():
+            logger.warning("Start translation blocked: no files selected")
             messagebox.showwarning(
                 self.get_text("no_files"),
                 self.get_text("no_files_message")
@@ -453,10 +480,12 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
                 self.get_text("confirm"),
                 self.get_text("replace_warning")
             ):
+                logger.debug("Start translation cancelled by replace confirmation dialog")
                 return
 
         # 如果開啟了清理模式，先清理檔案
         if self.clean_mode_var.get():
+            logger.debug("Pre-translation cleaning enabled")
             self.status_label.config(text=self.get_text("cleaning"))
             self.update_idletasks()
             
@@ -499,6 +528,11 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
                     total_subtitles
                 )
             )
+            logger.debug(
+                "Pre-translation cleaning completed total_cleaned=%s total_subtitles=%s",
+                total_cleaned,
+                total_subtitles,
+            )
             self.update_idletasks()
 
         # 重置進度條
@@ -517,6 +551,17 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
                 clean_before_translate=self.clean_mode_var.get(),
                 replace_original=self.replace_original_var.get(),
                 use_alt_prompt=self.use_alt_prompt_var.get(),
+            )
+            logger.info(
+                "Dispatching coordinator request files=%s source=%s target=%s model=%s parallel=%s clean=%s replace=%s alt_prompt=%s",
+                total_files,
+                request.source_lang,
+                request.target_lang,
+                request.model_name,
+                request.parallel_requests,
+                request.clean_before_translate,
+                request.replace_original,
+                request.use_alt_prompt,
             )
             self.coordinator.run_async(request, callback=self._on_coordinator_done)
             self.status_label.config(
@@ -540,6 +585,7 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
             )
             thread.set_app(self)
             thread.start()
+            logger.debug("Started legacy translation thread file=%s", file_path)
 
         self.status_label.config(
             text=self.get_text("translating").format(total_files)
@@ -549,6 +595,13 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
         self.after(0, lambda: self._on_coordinator_complete(summary))
 
     def _on_coordinator_complete(self, summary):
+        logger.info(
+            "Coordinator completed total=%s success=%s failed=%s auto_clean_workspace=%s",
+            summary.total_files,
+            summary.successful_files,
+            summary.failed_files,
+            self.auto_clean_workspace_var.get(),
+        )
         if self.auto_clean_workspace_var.get():
             self.file_list.delete(0, tk.END)
             self.status_label.config(text=self.get_text("workspace_cleaned"))
@@ -569,6 +622,12 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
         )
 
     def on_coordinator_event(self, event):
+        logger.debug(
+            "Coordinator event received current=%s total=%s message=%s",
+            getattr(event, "current", None),
+            getattr(event, "total", None),
+            getattr(event, "message", ""),
+        )
         self.after(0, lambda: self._apply_progress(event))
 
     def _apply_progress(self, event):
@@ -594,6 +653,7 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
     def update_progress(self, current, total, extra_data=None):
         """更新進度"""
         if extra_data and extra_data.get("type") == "file_conflict":
+            logger.debug("File conflict progress event path=%s", extra_data.get("path"))
             # 在主線程中顯示對話框
             result = self.show_countdown_dialog(
                 self.get_text("file_conflict_message").format(os.path.basename(extra_data['path'])),
@@ -602,6 +662,7 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
             
             # 將結果發送回翻譯線程
             extra_data["queue"].put(result)
+            logger.debug("File conflict result sent result=%s", result)
             return
             
         # 正常的進度更新
@@ -615,10 +676,12 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
                     percentage
                 )
             )
+            logger.debug("Progress updated current=%s total=%s percentage=%s", current, total, percentage)
             self.update_idletasks()
 
     def file_translated(self, message):
         """處理檔案翻譯完成的回調"""
+        logger.debug("File translated callback message=%s", message)
         current_text = self.status_label.cget("text")
         self.status_label.config(text=f"{current_text}\n{message}")
         
@@ -758,6 +821,7 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
 
     def show_countdown_dialog(self, message, countdown=5):
         """顯示帶有倒計時的對話框"""
+        logger.debug("Showing conflict dialog countdown=%s message=%s", countdown, message)
         # 創建新視窗
         countdown_window = tk.Toplevel(self)
         countdown_window.title(self.get_text("file_conflict_title"))
@@ -835,11 +899,13 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
         
         countdown_window.after(1000, update_countdown)
         countdown_window.wait_window()
+        logger.debug("Conflict dialog closed result=%s", self.dialog_result)
         return self.dialog_result
 
     def set_dialog_result(self, result):
         """設置對話框結果並關閉視窗"""
         self.dialog_result = result
+        logger.debug("Conflict dialog result set result=%s", result)
         if self.countdown_window:
             self.countdown_window.destroy()
             self.countdown_window = None
@@ -851,7 +917,9 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
             if selected:
                 self.file_list.delete(selected)
                 self.status_label.config(text=self.get_text("file_removed"))
+                logger.debug("Deleted selected file index=%s", selected)
         except Exception as e:
+            logger.exception("Failed deleting selected file")
             messagebox.showerror(
                 self.get_text("error"),
                 self.get_text("error_message").format(str(e))

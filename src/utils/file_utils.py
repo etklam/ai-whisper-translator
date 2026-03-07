@@ -1,7 +1,10 @@
 import os
 import re
 import shutil
+import logging
 import pysrt
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ensure_backup_dir",
@@ -13,10 +16,14 @@ __all__ = [
 def ensure_backup_dir(backup_path):
     """確保備份目錄存在"""
     if not os.path.exists(backup_path):
+        logger.debug("Creating backup directory path=%s", backup_path)
         os.makedirs(backup_path)
+    else:
+        logger.debug("Backup directory already exists path=%s", backup_path)
 
 def clean_srt_file(input_file, create_backup=False):
     """清理 SRT 檔案，移除不需要的字幕，重新排序字幕編號"""
+    logger.debug("Cleaning SRT file path=%s create_backup=%s", input_file, create_backup)
     result = {
         "cleaned": 0,
         "total": 0
@@ -29,6 +36,7 @@ def clean_srt_file(input_file, create_backup=False):
             ensure_backup_dir(backup_path)
             backup_file = os.path.join(backup_path, os.path.basename(input_file))
             shutil.copy2(input_file, backup_file)
+            logger.debug("Backup created source=%s backup=%s", input_file, backup_file)
         
         with open(input_file, 'r', encoding='utf-8') as f:
             lines = f.readlines()
@@ -63,10 +71,17 @@ def clean_srt_file(input_file, create_backup=False):
         # 寫回原始檔案
         with open(input_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(new_lines))
+        logger.debug(
+            "Cleaned SRT completed path=%s kept=%s total=%s",
+            input_file,
+            result["cleaned"],
+            result["total"],
+        )
         
         return result
         
     except Exception as e:
+        logger.exception("Failed cleaning SRT path=%s", input_file)
         raise Exception(f"處理檔案時發生錯誤: {str(e)}")
 
 def get_language_suffix(language):
@@ -111,6 +126,7 @@ def get_output_path(file_path, target_lang, replace_original=False):
     """獲取翻譯後的輸出路徑"""
     # 如果選擇取代原始檔案，直接返回原始檔案路徑
     if replace_original:
+        logger.debug("Using original path for replace mode path=%s", file_path)
         return file_path
 
     # 獲取原始檔案的目錄和檔名
@@ -119,4 +135,11 @@ def get_output_path(file_path, target_lang, replace_original=False):
     
     # 在原始檔案的相同目錄下創建新檔案
     lang_suffix = get_language_suffix(target_lang)
-    return os.path.join(dir_name, f"{name}{lang_suffix}{ext}")
+    output_path = os.path.join(dir_name, f"{name}{lang_suffix}{ext}")
+    logger.debug(
+        "Computed output path source=%s target_lang=%s output=%s",
+        file_path,
+        target_lang,
+        output_path,
+    )
+    return output_path

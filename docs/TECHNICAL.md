@@ -71,6 +71,12 @@ High-level flow:
 
 - Ollama endpoint (default): `http://localhost:11434/v1/chat/completions`
 - Root process env sets: `OLLAMA_NUM_PARALLEL=5` in `main.py`
+- Develop mode logging triggers:
+  - `APP_ENV=development` (case-insensitive), or
+  - `APP_DEBUG=1`
+- Logging levels:
+  - develop mode: `DEBUG`
+  - default mode: `INFO`
 - UI default parallel requests: `10`
 - `TranslationRequest.max_retries`: default `1`
 - Prompt file: `src/translation/prompts.json`

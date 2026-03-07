@@ -56,6 +56,20 @@ uv run python main.py
 python main.py
 ```
 
+## Develop Mode 日誌
+
+可用以下任一環境變數開啟大量開發日誌：
+
+```powershell
+$env:APP_ENV="development"; uv run python main.py
+```
+
+```powershell
+$env:APP_DEBUG="1"; uv run python main.py
+```
+
+預設模式維持 `INFO` 等級輸出。
+
 ## 第一次翻譯（5 步）
 
 1. 點 `Select SRT Files` 或 `Add Folder` 匯入字幕。

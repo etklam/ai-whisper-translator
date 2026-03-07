@@ -56,6 +56,20 @@ Fallback:
 python main.py
 ```
 
+## Develop Mode Logging
+
+Enable verbose development logs with either environment variable:
+
+```powershell
+$env:APP_ENV="development"; uv run python main.py
+```
+
+```powershell
+$env:APP_DEBUG="1"; uv run python main.py
+```
+
+Default mode stays at `INFO` log level.
+
 ## First Translation in 5 Steps
 
 1. Click `Select SRT Files` or `Add Folder`.
