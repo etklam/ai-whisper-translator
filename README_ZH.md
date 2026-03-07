@@ -1,75 +1,85 @@
-# SRT 字幕翻譯器
+# AI Whisper Translator (SRT) - 快速上手
 
-這是一個基於 Ollama 的 SRT 字幕檔翻譯工具，支援多種語言之間的翻譯，並提供多項實用功能。
+這是一個以桌面 GUI 操作的 `.srt` 字幕翻譯工具，使用本機 Ollama 模型進行翻譯。
 
-## 版權聲明
-本專案基於 MIT License 授權的原始程式碼進行修改和擴展。原始程式碼的版權歸原作者所有，修改後的版本同樣遵循 MIT License 條款。
+本文件只聚焦第一次使用者的安裝與上手流程。若你要維護、擴充或理解架構，請改看下方技術文件。
 
-## 安裝步驟
+## 這個工具可以做什麼
 
-1. 確保已安裝 Python 3.6 或更新版本
-2. 安裝必要套件：
-   ```bash
-   pip install -r requirements.txt
-   ```
+- 翻譯單一或多個 SRT 檔案
+- 支援拖放匯入（需安裝 `tkinterdnd2`）
+- 支援整個資料夾批量匯入與重複檔案過濾
+- 支援翻譯前字幕清理
+- 目標檔案已存在時可選擇覆蓋、重新命名或跳過
 
-## 使用方法
+## 先決條件
 
-1. 運行程式：
+- Python 3.10 以上
+- 本機 Ollama 服務已啟動（`http://localhost:11434`）
+- Ollama 內至少有一個可用模型
+
+可選：
+- `tkinterdnd2`（拖放功能；`requirements.txt` 已包含）
+
+## 安裝
+
+```bash
+pip install -r requirements.txt
+```
+
+## 啟動 Ollama 並下載模型
+
+```bash
+ollama serve
+ollama pull gpt-oss:20b
+```
+
+若你已有其他相容於 Ollama chat completions API 的模型，也可以直接使用。
+
+## 啟動程式
+
 ```bash
 python main.py
 ```
 
-2. 可以通過以下方式添加 SRT 檔案：
-   - 點擊「選擇 SRT 檔案」按鈕
-   - 直接拖放檔案到視窗中（需要 tkinterdnd2 支援）
+## 第一次翻譯（5 步）
 
-## 注意事項
+1. 點 `Select SRT Files` 或 `Add Folder` 匯入字幕。
+2. 設定 `Source Language` 與 `Target Language`。
+3. 從模型下拉選單選擇模型。
+4. 設定 `Parallel Requests`（一般建議先從 `3-5` 開始）。
+5. 按 `Start Translation` 開始。
 
-- 確保 Ollama 服務運行中（http://localhost:11434）
-  - 安裝ollama
-  - 在`CMD`中運行`ollama run huihui_ai/aya-expanse-abliterated`, 第一次運行時會下載模型, 第二次會很快 
-- 建議使用 aya 模型
-- 並行請求數建議設為 3
-- 翻譯大量字幕時請耐心等待
+## 常用選項說明
 
-1. 備份說明
-   - 備份功能只在選擇「取代原始檔案」模式時啟用
-   - 備份檔案會自動保存在原始檔案所在目錄的 backup 資料夾中
-   - 如果備份失敗會顯示警告訊息，但不會中斷翻譯過程
+- `Auto Clean Before Translation`：移除僅括號內容的字幕行並重排編號。
+- `Replace Original File`：直接覆寫原檔，並先建立備份。
+- `Clean Workspace After Translation`：完成後自動清空工作區檔案清單。
+- `Debug Mode`：在 console 顯示詳細翻譯過程。
 
-## 個人更新
-   - 程式碼個人化(我不是python programmer, 清理掉我不能理解的部分更有利我管理)
-     - 移除了未使用的功能，使程式碼更加簡潔
-     - 重構了部分代碼結構，提高可維護性
-     - 優化了錯誤處理機制
-   
-   - 新增功能
-     - 批量處理功能
-       - 支援整個文件夾的 SRT 檔案批量添加
-       - 自動跳過已翻譯的中文字幕（*.zh_tw.srt）
-       - 自動過濾重複檔案
-       - 顯示添加和跳過檔案的統計信息
-     
-     - 調試模式 (Debug Mode)
-       - 在控制台實時顯示翻譯進度
-       - 顯示原始文本和翻譯結果的對照
-       - 方便檢查翻譯質量和調試問題
-     
-     - 自動清理功能
-       - 可選在翻譯前自動清理 SRT 檔案
-       - 移除只包含括號內文字的字幕（如 Whisper AI 產生的不準確音效描述）
-       - 自動備份原始檔案
-       - 顯示清理進度和統計信息（總字幕數/已清理數）
-     
-     - 使用者介面改進
-       - 添加了清理模式和調試模式的開關選項
-       - 優化了進度顯示
-       - 改進了錯誤提示信息
-       - 改進了按鈕和選項的佈局
+## 輸出與備份規則
 
-     - 取代原始檔案
+- 預設會在檔名加上語言後綴（例如：`movie.zh_tw.srt`）。
+- 若輸出檔已存在，可選 `Overwrite`、`Rename`、`Skip`。
+- 啟用 `Replace Original File` 時，備份會存到來源檔旁的 `backup/` 資料夾。
 
-## 授權協議
+## 快速排錯
 
-MIT License
+- 模型清單是空的：
+  - 確認 `ollama serve` 正在執行。
+  - 用 `ollama list` 檢查模型是否存在。
+- 一開始就翻譯失敗：
+  - 檢查是否可連到 `http://localhost:11434`。
+  - 降低並行數或改用較小模型再試。
+- 拖放無法使用：
+  - 重新安裝依賴：`pip install -r requirements.txt`。
+
+## 延伸文件
+
+- 完整技術文件（英文）：[`docs/TECHNICAL.md`](docs/TECHNICAL.md)
+- 完整技術文件（繁中）：[`docs/TECHNICAL_ZH.md`](docs/TECHNICAL_ZH.md)
+- 封裝說明：[`docs/packaging.md`](docs/packaging.md)
+
+## 授權
+
+MIT License，詳見 [`LICENSE`](LICENSE)。

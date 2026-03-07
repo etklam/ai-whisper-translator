@@ -1,127 +1,85 @@
-# SRT Subtitle Translator
+# AI Whisper Translator (SRT) - Quick Start
 
-A powerful SRT subtitle translation tool based on Ollama, supporting translation between multiple languages with various useful features.
+Desktop GUI tool for translating `.srt` subtitle files with a local Ollama model.
 
-## Features
+Use this README for first-time setup and your first successful translation. For architecture and maintenance details, use the technical docs linked below.
 
-### Core Features
-- Batch translation of SRT subtitle files
-- Drag and drop file support
-- Bulk folder import
-- Smart file backup (only when replacing original files)
-- Multiple translation model support
-- Multi-threaded parallel translation (up to 20 parallel requests)
+## What It Does
 
-### Translation Options
-- Support for Japanese, English, and Traditional Chinese translations
-- Source and target language selection
-- Automatic source language detection
+- Translates one or many SRT files
+- Supports drag-and-drop (when `tkinterdnd2` is installed)
+- Supports folder import and duplicate filtering
+- Supports optional pre-translation subtitle cleanup
+- Supports overwrite/rename/skip when output files already exist
 
-### Advanced Features
-- Auto-clean before translation (removes invalid subtitles)
-- Direct original file replacement mode (with automatic backup)
-- Automatic file conflict handling (overwrite/rename/skip)
-- Workspace auto-cleanup after translation
-- Debug mode support
+## Prerequisites
 
-## System Requirements
+- Python 3.10+
+- Ollama running locally (`http://localhost:11434`)
+- At least one chat model available in Ollama
 
-- Python 3.6 or higher
-- Ollama service running locally (default port: 11434)
-- tkinterdnd2 recommended for drag-and-drop support
+Optional:
+- `tkinterdnd2` for drag-and-drop support (already included in `requirements.txt`)
 
-## Installation
+## Install
 
-1. Install required Python packages:
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Ensure Ollama service is running:
+## Start Ollama and Pull a Model
+
 ```bash
 ollama serve
+ollama pull gpt-oss:20b
 ```
 
-3. Download the required translation model:
-```bash
-ollama pull huihui_ai/aya-expanse-abliterated
-```
+You can use a different model if it supports Ollama's chat completions API.
 
-## Usage Guide
+## Run the App
 
-### Basic Operations
-1. Run the program:
 ```bash
 python main.py
 ```
 
-2. Add files using one of these methods:
-   - Click "Select SRT Files" button
-   - Drag and drop files into the window
-   - Use "Add Folder" feature
+## First Translation in 5 Steps
 
-3. Select translation settings:
-   - Choose source language (Japanese/English/Auto Detect)
-   - Choose target language (Traditional Chinese/English/Japanese)
-   - Select translation model
-   - Set parallel requests (1-20)
+1. Click `Select SRT Files` or `Add Folder`.
+2. Choose `Source Language` and `Target Language`.
+3. Select a model from the model dropdown.
+4. Set `Parallel Requests` (start with `3-5` if your machine is modest).
+5. Click `Start Translation`.
 
-4. Click "Start Translation" to begin processing
+## Key Options
 
-### Advanced Settings
+- `Auto Clean Before Translation`: Removes bracket-only subtitle lines and reorders indices.
+- `Replace Original File`: Writes output back to the original file path and creates a backup.
+- `Clean Workspace After Translation`: Clears loaded files after completion.
+- `Debug Mode`: Prints detailed translation traces to console.
 
-#### File Processing Options
-- [Auto Clean Before Translation]: Automatically remove invalid subtitle lines
-- [Replace Original File]: Directly overwrite original files (with automatic backup)
-- [Clean Workspace After Translation]: Auto-clear file list after completion
-- [Debug Mode]: Display detailed translation process information
+## Output and Backup Rules
 
-#### File Conflict Handling
-When target file already exists, system provides three options:
-- Overwrite: Replace existing file
-- Rename: Automatically add numeric suffix
-- Skip: Keep existing file unchanged
+- Default output adds a language suffix (example: `movie.zh_tw.srt`).
+- If target file exists, you can choose `Overwrite`, `Rename`, or `Skip`.
+- When `Replace Original File` is enabled, backups are stored in a `backup/` folder next to the source file.
 
-## Important Notes
+## Quick Troubleshooting
 
-1. Backup Information
-   - Original files are backed up only when using "Replace Original File" mode
-   - Backups are stored in a 'backup' folder in the same directory
+- Model list is empty:
+  - Ensure `ollama serve` is running.
+  - Confirm models exist: `ollama list`.
+- Translation fails immediately:
+  - Verify Ollama endpoint is reachable at `http://localhost:11434`.
+  - Try a smaller model or lower parallel requests.
+- Drag-and-drop does not work:
+  - Reinstall dependencies: `pip install -r requirements.txt`.
 
-2. Performance Considerations
-   - Adjust parallel requests based on system performance
-   - Default value is 10, adjustable from 1-20
+## Documentation
 
-3. File Naming Convention
-   - Default: Adds language suffix to filename (e.g., .zh_tw.srt)
-   - Original filename preserved in replacement mode
-
-## Troubleshooting
-
-1. If translation fails:
-   - Verify Ollama service is running
-   - Check network connection
-   - Confirm selected model is installed
-
-2. If drag-and-drop doesn't work:
-   - Verify tkinterdnd2 is installed
-   - Reinstall program dependencies
-
-## Technical Support
-
-If you encounter issues:
-1. Check common problems section
-2. Verify you're using the latest version
-3. Provide detailed error information and steps to reproduce
-
-## Language Support
-
-The application interface supports:
-- Traditional Chinese
-- English
-
-You can switch between languages using the language toggle button at the top of the window.
+- Full technical docs (EN): [`docs/TECHNICAL.md`](docs/TECHNICAL.md)
+- Full technical docs (ZH-TW): [`docs/TECHNICAL_ZH.md`](docs/TECHNICAL_ZH.md)
+- Packaging notes: [`docs/packaging.md`](docs/packaging.md)
 
 ## License
 
-This program is open-source software, released under the MIT License. 
+MIT License. See [`LICENSE`](LICENSE).
