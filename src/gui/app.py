@@ -4,28 +4,28 @@ import os
 import sys
 import logging
 from queue import Queue
+import threading
 
 from src.utils.file_utils import ensure_backup_dir, clean_srt_file
 
-# 嘗試導入 tkinterdnd2，如果失敗則使用基本的 tkinter
-try:
-    from tkinterdnd2 import *
-    TKDND_AVAILABLE = True
-except ImportError:
-    TKDND_AVAILABLE = False
-    print("警告：未安裝 tkinterdnd2 模組，拖放功能將被停用")
+# 暫時禁用 tkinterdnd2（macOS 兼容性問題）
+# TODO: 修復 tkinterdnd2 後重新啟用
+TKDND_AVAILABLE = False
+print("提示：拖放功能已暫時停用（macOS 兼容性）")
 
 from src.translation.translation_thread import TranslationThread
 
 logger = logging.getLogger(__name__)
 
-class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
-    def __init__(self, coordinator=None):
+class App(tk.Tk):
+    def __init__(self, coordinator=None, asr_coordinator=None):
         super().__init__()
         self.countdown_window = None
         self.coordinator = coordinator
-        logger.debug("App initialized coordinator_present=%s tkdnd_available=%s", bool(coordinator), TKDND_AVAILABLE)
-        
+        self.asr_coordinator = asr_coordinator
+        logger.debug("App initialized coordinator_present=%s asr_coordinator_present=%s tkdnd_available=%s",
+                    bool(coordinator), bool(asr_coordinator), TKDND_AVAILABLE)
+
         # 初始化語言設定
         self.current_language = tk.StringVar(value="zh_tw")  # 預設使用繁體中文
         self.translations = {
@@ -64,7 +64,24 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
                 "overwrite": "覆蓋",
                 "rename": "重新命名",
                 "skip": "跳過",
-                "auto_rename_countdown": "{} 秒後自動重新命名"
+                "auto_rename_countdown": "{} 秒後自動重新命名",
+                # ASR translatons
+                "asr_tab": "語音轉文字",
+                "translate_tab": "字幕翻譯",
+                "select_audio": "選擇音訊檔案",
+                "youtube_url": "YouTube URL:",
+                "download_from_youtube": "從 YouTube 下載",
+                "whisper_model_label": "Whisper 模型:",
+                "gpu_backend": "GPU 後端:",
+                "gpu_backend_options": ["auto", "metal", "cuda", "hip", "vulkan", "opencl", "cpu"],
+                "use_gpu": "使用 GPU 加速",
+                "asr_language_label": "轉錄語言:",
+                "asr_language_options": ["自動偵測", "英文", "繁體中文", "簡體中文", "日文", "韓文", "法文", "德文", "西班牙文"],
+                "output_format": "輸出格式:",
+                "output_format_options": ["srt", "txt", "json", "verbose"],
+                "start_asr": "開始轉錄",
+                "asr_not_available": "ASR 功能不可用",
+                "asr_not_available_msg": "Whisper transcriber not available. Please install whisper.cpp library and set up the model path.",
             },
             "en": {
                 "window_title": "SRT Subtitle Translator",
@@ -101,7 +118,24 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
                 "overwrite": "Overwrite",
                 "rename": "Rename",
                 "skip": "Skip",
-                "auto_rename_countdown": "Auto rename in {} seconds"
+                "auto_rename_countdown": "Auto rename in {} seconds",
+                # ASR translatons
+                "asr_tab": "ASR",
+                "translate_tab": "Translate",
+                "select_audio": "Select Audio File",
+                "youtube_url": "YouTube URL:",
+                "download_from_youtube": "Download from YouTube",
+                "whisper_model_label": "Whisper Model:",
+                "gpu_backend": "GPU Backend:",
+                "gpu_backend_options": ["auto", "metal", "cuda", "hip", "vulkan", "opencl", "cpu"],
+                "use_gpu": "Use GPU Acceleration",
+                "asr_language_label": "Transcribe Language:",
+                "asr_language_options": ["Auto Detect", "English", "Traditional Chinese", "Simplified Chinese", "Japanese", "Korean", "French", "German", "Spanish"],
+                "output_format": "Output Format:",
+                "output_format_options": ["srt", "txt", "json", "verbose"],
+                "start_asr": "Start Transcription",
+                "asr_not_available": "ASR Not Available",
+                "asr_not_available_msg": "Whisper transcriber not available. Please install whisper.cpp library and set up the model path.",
             }
         }
 
@@ -202,17 +236,56 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
                 self.target_lang.set("日文")
 
     def create_widgets(self):
-        # 按鈕框架
-        button_frame = ttk.Frame(self)
-        button_frame.pack(pady=10)
+        # 頂部控制框架（語言切換）
+        top_frame = ttk.Frame(self)
+        top_frame.pack(pady=10)
 
         # 語言切換按鈕
         self.lang_button = ttk.Button(
-            button_frame,
+            top_frame,
             text=self.get_text("switch_language"),
             command=self.switch_language
         )
-        self.lang_button.pack(side=tk.LEFT, padx=5)
+        self.lang_button.pack(padx=5)
+
+        # 創建標籤頁（Notebook）
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        # 創建兩個標籤頁
+        self.translate_tab = ttk.Frame(self.notebook)
+        self.asr_tab = ttk.Frame(self.notebook)
+
+        self.notebook.add(self.translate_tab, text=self.get_text("translate_tab"))
+        self.notebook.add(self.asr_tab, text=self.get_text("asr_tab"))
+
+        # 創建翻譯標籤頁的內容
+        self._create_translate_tab()
+
+        # 創建 ASR 標籤頁的內容
+        self._create_asr_tab()
+
+        # 進度條框架（標籤頁外）
+        progress_frame = ttk.Frame(self)
+        progress_frame.pack(fill=tk.X, padx=20, pady=10)
+
+        # 進度條
+        self.progress_bar = ttk.Progressbar(progress_frame, length=400, mode='determinate')
+        self.progress_bar.pack(fill=tk.X)
+
+        # 狀態標籤框架
+        status_frame = ttk.Frame(self)
+        status_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+
+        # 狀態標籤
+        self.status_label = ttk.Label(status_frame, text="", wraplength=550, justify="center")
+        self.status_label.pack(fill=tk.BOTH, expand=True)
+
+    def _create_translate_tab(self):
+        """創建翻譯標籤頁內容"""
+        # 按鈕框架
+        button_frame = ttk.Frame(self.translate_tab)
+        button_frame.pack(pady=10)
 
         # 檔案選擇按鈕
         self.file_button = ttk.Button(
@@ -231,41 +304,41 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
         self.folder_button.pack(side=tk.LEFT, padx=5)
 
         # 檔案列表框架
-        list_frame = ttk.Frame(self)
+        list_frame = ttk.Frame(self.translate_tab)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        
+
         # 檔案列表
         self.file_list = tk.Listbox(list_frame, width=70, height=10, selectmode=tk.SINGLE)
         self.file_list.pack(fill=tk.BOTH, expand=True)
-        
+
         # 綁定 Del 鍵事件
         self.file_list.bind('<Delete>', self.delete_selected_file)
-        
+
         # 添加滾動條
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.file_list.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.file_list.configure(yscrollcommand=scrollbar.set)
 
         # 語言選擇框架
-        lang_frame = ttk.Frame(self)
+        lang_frame = ttk.Frame(self.translate_tab)
         lang_frame.pack(pady=10)
 
         # 原文語言標籤和選擇框
         self.source_lang_label = ttk.Label(lang_frame, text=self.get_text("source_lang_label"))
         self.source_lang_label.grid(row=0, column=0)
         self.source_lang = ttk.Combobox(lang_frame, values=self.translations[self.current_language.get()]["source_lang_options"])
-        self.source_lang.set(self.translations[self.current_language.get()]["source_lang_options"][0])  # 設置預設值
+        self.source_lang.set(self.translations[self.current_language.get()]["source_lang_options"][0])
         self.source_lang.grid(row=0, column=1)
 
         # 目標語言標籤和選擇框
         self.target_lang_label = ttk.Label(lang_frame, text=self.get_text("target_lang_label"))
         self.target_lang_label.grid(row=0, column=2)
         self.target_lang = ttk.Combobox(lang_frame, values=self.translations[self.current_language.get()]["target_lang_options"])
-        self.target_lang.set(self.translations[self.current_language.get()]["target_lang_options"][0])  # 設置預設值
+        self.target_lang.set(self.translations[self.current_language.get()]["target_lang_options"][0])
         self.target_lang.grid(row=0, column=3)
 
         # 模型選擇框架
-        model_frame = ttk.Frame(self)
+        model_frame = ttk.Frame(self.translate_tab)
         model_frame.pack(pady=10)
 
         # 模型選擇標籤和選擇框
@@ -283,12 +356,8 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
         self.parallel_requests.grid(row=0, column=3)
 
         # Checkbox 框架
-        checkbox_frame = ttk.Frame(self)
+        checkbox_frame = ttk.Frame(self.translate_tab)
         checkbox_frame.pack(pady=5)
-
-        # 使用 grid 布局來實現自動換行
-        # 設定每行最多顯示 2 個複選框
-        max_columns = 2
 
         # 清理模式複選框
         self.clean_mode_check = ttk.Checkbutton(
@@ -330,33 +399,149 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
         )
         self.use_alt_prompt_check.grid(row=2, column=0, padx=10, pady=2, sticky='w')
 
-        # 配置 grid 的列和行權重，使其能夠自適應
+        # 配置 grid
         checkbox_frame.grid_columnconfigure(0, weight=1)
         checkbox_frame.grid_columnconfigure(1, weight=1)
 
         # 翻譯按鈕
         self.translate_button = ttk.Button(
-            self,
+            self.translate_tab,
             text=self.get_text("start_translation"),
             command=self.start_translation
         )
         self.translate_button.pack(pady=10)
 
-        # 進度條框架
-        progress_frame = ttk.Frame(self)
-        progress_frame.pack(fill=tk.X, padx=20, pady=10)
-        
-        # 進度條
-        self.progress_bar = ttk.Progressbar(progress_frame, length=400, mode='determinate')
-        self.progress_bar.pack(fill=tk.X)
+    def _create_asr_tab(self):
+        """創建 ASR 標籤頁內容"""
+        # 按鈕框架
+        button_frame = ttk.Frame(self.asr_tab)
+        button_frame.pack(pady=10)
 
-        # 狀態標籤框架
-        status_frame = ttk.Frame(self)
-        status_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
-        
-        # 狀態標籤
-        self.status_label = ttk.Label(status_frame, text="", wraplength=550, justify="center")
-        self.status_label.pack(fill=tk.BOTH, expand=True)
+        # 選擇音訊檔案按鈕
+        self.audio_button = ttk.Button(
+            button_frame,
+            text=self.get_text("select_audio"),
+            command=self.select_audio
+        )
+        self.audio_button.pack(side=tk.LEFT, padx=5)
+
+        # YouTube URL 框架
+        youtube_frame = ttk.Frame(self.asr_tab)
+        youtube_frame.pack(pady=5, padx=10, fill=tk.X)
+
+        self.youtube_url_label = ttk.Label(youtube_frame, text=self.get_text("youtube_url"))
+        self.youtube_url_label.pack(anchor='w')
+
+        self.youtube_url_entry = ttk.Entry(youtube_frame)
+        self.youtube_url_entry.pack(fill=tk.X, pady=2)
+
+        # 從 YouTube 下載按鈕
+        self.youtube_button = ttk.Button(
+            youtube_frame,
+            text=self.get_text("download_from_youtube"),
+            command=self.download_from_youtube
+        )
+        self.youtube_button.pack(anchor='e', pady=2)
+
+        # 音訊檔案路徑顯示
+        self.audio_path_label = ttk.Label(self.asr_tab, text="選擇的檔案：無")
+        self.audio_path_label.pack(pady=5, padx=10, anchor='w')
+
+        # 模型設定框架
+        asr_model_frame = ttk.LabelFrame(self.asr_tab, text="Whisper 模型設定")
+        asr_model_frame.pack(pady=10, padx=10, fill=tk.X)
+
+        # Whisper 模型路徑
+        model_path_frame = ttk.Frame(asr_model_frame)
+        model_path_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.asr_model_label = ttk.Label(model_path_frame, text=self.get_text("whisper_model_label"))
+        self.asr_model_label.pack(side=tk.LEFT, padx=5)
+
+        self.asr_model_path = ttk.Entry(model_path_frame)
+        self.asr_model_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.asr_model_path.insert(0, "whisper.cpp/models/for-tests-ggml-base.bin")
+
+        # 模型選擇按鈕
+        self.browse_model_button = ttk.Button(
+            model_path_frame,
+            text="瀏覽",
+            command=self.browse_model
+        )
+        self.browse_model_button.pack(side=tk.LEFT, padx=5)
+
+        # GPU 設定
+        gpu_frame = ttk.Frame(asr_model_frame)
+        gpu_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.use_gpu_var = tk.BooleanVar(value=True)
+        self.use_gpu_check = ttk.Checkbutton(
+            gpu_frame,
+            text=self.get_text("use_gpu"),
+            variable=self.use_gpu_var
+        )
+        self.use_gpu_check.pack(side=tk.LEFT, padx=5)
+
+        self.gpu_backend_label = ttk.Label(gpu_frame, text=self.get_text("gpu_backend"))
+        self.gpu_backend_label.pack(side=tk.LEFT, padx=5)
+
+        self.gpu_backend = ttk.Combobox(
+            gpu_frame,
+            values=self.translations[self.current_language.get()]["gpu_backend_options"]
+        )
+        self.gpu_backend.set("auto")
+        self.gpu_backend.pack(side=tk.LEFT, padx=5)
+
+        # 轉錄設定框架
+        transcribe_frame = ttk.LabelFrame(self.asr_tab, text="轉錄設定")
+        transcribe_frame.pack(pady=10, padx=10, fill=tk.X)
+
+        # 語言選擇
+        lang_select_frame = ttk.Frame(transcribe_frame)
+        lang_select_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.asr_lang_label = ttk.Label(lang_select_frame, text=self.get_text("asr_language_label"))
+        self.asr_lang_label.pack(side=tk.LEFT, padx=5)
+
+        self.asr_lang = ttk.Combobox(
+            lang_select_frame,
+            values=self.translations[self.current_language.get()]["asr_language_options"]
+        )
+        self.asr_lang.set("自動偵測")
+        self.asr_lang.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        # 輸出格式選擇
+        output_format_frame = ttk.Frame(transcribe_frame)
+        output_format_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.output_format_label = ttk.Label(output_format_frame, text=self.get_text("output_format"))
+        self.output_format_label.pack(side=tk.LEFT, padx=5)
+
+        self.output_format = ttk.Combobox(
+            output_format_frame,
+            values=self.translations[self.current_language.get()]["output_format_options"]
+        )
+        self.output_format.set("srt")
+        self.output_format.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        # 輸出路徑
+        output_path_frame = ttk.Frame(transcribe_frame)
+        output_path_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.asr_output_path_label = ttk.Label(output_path_frame, text="輸出檔案：")
+        self.asr_output_path_label.pack(side=tk.LEFT, padx=5)
+
+        self.asr_output_path = ttk.Entry(output_path_frame)
+        self.asr_output_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.asr_output_path.insert(0, "transcription.srt")
+
+        # 開始轉錄按鈕
+        self.asr_button = ttk.Button(
+            self.asr_tab,
+            text=self.get_text("start_asr"),
+            command=self.start_asr
+        )
+        self.asr_button.pack(pady=10)
 
     def handle_drop(self, event):
         """處理檔案拖放"""
@@ -381,6 +566,153 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
         logger.debug("File picker selected count=%s", len(files))
         for file in files:
             self.file_list.insert(tk.END, file)
+
+    # ========== ASR Methods ==========
+    def select_audio(self):
+        """選擇音訊檔案"""
+        file_path = filedialog.askopenfilename(
+            title="選擇音訊檔案",
+            filetypes=[
+                ("Audio files", "*.wav *.mp3 *.m4a *.flac *.ogg *.wma"),
+                ("All files", "*.*")
+            ]
+        )
+        if file_path:
+            self.audio_path_label.config(text=f"選擇的檔案：{file_path}")
+            self.audio_path_label.cget("from")
+            logger.debug("Audio file selected: %s", file_path)
+
+    def browse_model(self):
+        """瀏覽 Whisper 模型檔案"""
+        file_path = filedialog.askopenfilename(
+            title="選擇 Whisper 模型",
+            filetypes=[("Model files", "*.bin"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.asr_model_path.delete(0, tk.END)
+            self.asr_model_path.insert(0, file_path)
+            logger.debug("Whisper model selected: %s", file_path)
+
+    def download_from_youtube(self):
+        """從 YouTube 下載音訊"""
+        url = self.youtube_url_entry.get().strip()
+        if not url:
+            messagebox.showwarning("警告", "請輸入 YouTube URL")
+            return
+
+        self.status_label.config(text="正在從 YouTube 下載音訊...")
+
+        def download_thread():
+            """Download audio in background thread."""
+            try:
+                from src.asr.audio_downloader import AudioDownloader
+
+                downloader = AudioDownloader(output_dir="downloads")
+                audio_path = downloader.download_audio_to_wav(url)
+
+                # Update UI from main thread
+                def update_success():
+                    self.audio_path_label.config(text=f"選擇的檔案：{audio_path}")
+                    self.status_label.config(text="下載完成！")
+                    logger.info("Audio downloaded from YouTube: %s", audio_path)
+
+                def update_error(error_msg):
+                    messagebox.showerror("錯誤", "下載失敗")
+                    self.status_label.config(text="下載失敗")
+                    logger.error("YouTube download error: %s", error_msg)
+
+                if audio_path:
+                    self.after(0, update_success)
+                else:
+                    self.after(0, lambda: update_error("下載失敗"))
+            except Exception as e:
+                error_msg = str(e)
+                self.after(0, lambda: self._show_download_error(error_msg))
+
+        def _show_download_error(self, error_msg):
+            """Show download error in main thread."""
+            messagebox.showerror("錯誤", f"下載失敗：{error_msg}")
+            self.status_label.config(text="下載失敗")
+            logger.error("YouTube download error: %s", error_msg)
+
+        # Start download in background thread
+        thread = threading.Thread(target=download_thread, daemon=True)
+        thread.start()
+
+    def start_asr(self):
+        """開始 ASR 轉錄"""
+        # 檢查音訊檔案
+        audio_text = self.audio_path_label.cget("text")
+        if "無" in audio_text or not audio_text:
+            messagebox.showwarning("警告", "請先選擇或下載音訊檔案")
+            return
+
+        # 提取音訊檔案路徑
+        audio_path = audio_text.replace("選擇的檔案：", "")
+        if not os.path.exists(audio_path):
+            messagebox.showerror("錯誤", f"音訊檔案不存在：{audio_path}")
+            return
+
+        # 檢查模型路徑
+        model_path = self.asr_model_path.get()
+        if not os.path.exists(model_path):
+            messagebox.showerror("錯誤", f"模型檔案不存在：{model_path}")
+            return
+
+        # 獲取設定
+        use_gpu = self.use_gpu_var.get()
+        gpu_backend = self.gpu_backend.get()
+        language_map = {
+            "自動偵測": None,
+            "英文": "en",
+            "繁體中文": "zh",
+            "簡體中文": "zh",
+            "日文": "ja",
+            "韓文": "ko",
+            "法文": "fr",
+            "德文": "de",
+            "西班牙文": "es",
+        }
+        language = language_map.get(self.asr_lang.get(), None)
+        output_format = self.output_format.get()
+        output_path = self.asr_output_path.get()
+
+        # 建立請求
+        from src.application.asr_coordinator import ASRRequest
+
+        request = ASRRequest(
+            input_path=audio_path,
+            output_path=output_path,
+            model_path=model_path,
+            language=language,
+            use_gpu=use_gpu,
+            gpu_backend=gpu_backend,
+            n_threads=4,
+            output_format=output_format,
+            max_retries=1
+        )
+
+        # 執行轉錄
+        self.status_label.config(text="正在轉錄...")
+
+        def run_asr():
+            try:
+                summary = self.asr_coordinator.run(request)
+                if summary.successful_files > 0:
+                    self.after(0, lambda: messagebox.showinfo("成功", f"轉錄完成！\n輸出：{output_path}"))
+                    self.after(0, lambda: self.status_label.config(text="轉錄完成！"))
+                else:
+                    self.after(0, lambda: messagebox.showerror("錯誤", "轉錄失敗"))
+                    self.after(0, lambda: self.status_label.config(text="轉錄失敗"))
+            except Exception as e:
+                logger.error("ASR error: %s", e)
+                self.after(0, lambda: messagebox.showerror("錯誤", f"轉錄失敗：{e}"))
+                self.after(0, lambda: self.status_label.config(text="轉錄失敗"))
+
+        import threading
+        thread = threading.Thread(target=run_asr, daemon=True)
+        thread.start()
+    # ========== End ASR Methods ==========
 
     def select_folder(self):
         """選擇文件夾並批量添加 SRT 檔案"""
@@ -624,6 +956,16 @@ class App(TkinterDnD.Tk if TKDND_AVAILABLE else tk.Tk):
     def on_coordinator_event(self, event):
         logger.debug(
             "Coordinator event received current=%s total=%s message=%s",
+            getattr(event, "current", None),
+            getattr(event, "total", None),
+            getattr(event, "message", ""),
+        )
+        self.after(0, lambda: self._apply_progress(event))
+
+    def on_asr_event(self, event):
+        """Handle ASR coordinator events."""
+        logger.debug(
+            "ASR event received current=%s total=%s message=%s",
             getattr(event, "current", None),
             getattr(event, "total", None),
             getattr(event, "message", ""),
