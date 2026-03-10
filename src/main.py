@@ -8,6 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 導入自定義模組
 from src.application.translation_coordinator import TranslationCoordinator
+from src.application.asr_coordinator import ASRCoordinator
 from src.gui.app import App
 from src.infrastructure.prompt.json_prompt_provider import JsonPromptProvider
 from src.infrastructure.runtime.logging_config import configure_logging
@@ -27,6 +28,11 @@ def build_default_coordinator():
         event_sink=None,
     )
 
+
+def build_asr_coordinator():
+    logger.debug("Building ASR coordinator")
+    return ASRCoordinator(event_sink=None)
+
 def main():
     """程式主入口點"""
     develop_mode = configure_logging()
@@ -34,9 +40,11 @@ def main():
     logger.debug("Develop mode=%s", develop_mode)
 
     coordinator = build_default_coordinator()
-    app = App(coordinator=coordinator)
+    asr_coordinator = build_asr_coordinator()
+    app = App(coordinator=coordinator, asr_coordinator=asr_coordinator)
     coordinator.event_sink = app.on_coordinator_event
-    logger.debug("Coordinator event sink bound to GUI app")
+    asr_coordinator.event_sink = app.on_asr_event
+    logger.debug("Coordinators event sink bound to GUI app")
     logger.info("Entering GUI main loop")
     app.mainloop()
     logger.info("Application shutdown")
