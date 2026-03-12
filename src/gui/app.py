@@ -1558,6 +1558,9 @@ class App(tk.Tk):
 
     def clean_srt_files(self):
         """清理選中的 SRT 檔案"""
+        if not hasattr(self, "file_list"):
+            messagebox.showwarning("提示", "此功能已移至新工作流程，請改用批次處理。")
+            return
         if self.file_list.size() == 0:
             messagebox.showwarning("提示", "請先選擇要清理的 SRT 檔案")
             return
