@@ -78,6 +78,18 @@ class App(tk.Tk):
                 "translate_tab": "字幕翻譯",
                 "select_audio": "選擇音訊檔案",
                 "youtube_url": "YouTube URL:",
+                "sources_section": "來源",
+                "youtube_urls": "YouTube URLs (一行一個):",
+                "select_audio_files": "選擇音訊檔案（可多選）",
+                "queue_section": "處理佇列",
+                "add_urls_to_queue": "加入 URL 到佇列",
+                "clear_queue": "清空佇列",
+                "start_queue": "開始處理",
+                "stop_queue": "停止",
+                "asr_section": "ASR 設定",
+                "translation_section": "翻譯（可選）",
+                "enable_translation": "啟用翻譯",
+                "output_section": "輸出設定",
                 "download_from_youtube": "從 YouTube 下載",
                 "whisper_model_label": "Whisper 模型:",
                 "gpu_backend": "GPU 後端:",
@@ -132,6 +144,18 @@ class App(tk.Tk):
                 "translate_tab": "Translate",
                 "select_audio": "Select Audio File",
                 "youtube_url": "YouTube URL:",
+                "sources_section": "Sources",
+                "youtube_urls": "YouTube URLs (one per line):",
+                "select_audio_files": "Select Audio Files (multi-select)",
+                "queue_section": "Queue",
+                "add_urls_to_queue": "Add URLs to Queue",
+                "clear_queue": "Clear Queue",
+                "start_queue": "Start Processing",
+                "stop_queue": "Stop",
+                "asr_section": "ASR Settings",
+                "translation_section": "Translation (Optional)",
+                "enable_translation": "Enable Translation",
+                "output_section": "Output",
                 "download_from_youtube": "Download from YouTube",
                 "whisper_model_label": "Whisper Model:",
                 "gpu_backend": "GPU Backend:",
@@ -184,64 +208,41 @@ class App(tk.Tk):
         
         # 更新語言切換按鈕
         self.lang_button.config(text=self.get_text("switch_language"))
-        
-        # 更新按鈕文字
-        self.file_button.config(text=self.get_text("select_files"))
-        self.folder_button.config(text=self.get_text("select_folder"))
-        self.translate_button.config(text=self.get_text("start_translation"))
-        
-        # 更新標籤文字
-        self.source_lang_label.config(text=self.get_text("source_lang_label"))
-        self.target_lang_label.config(text=self.get_text("target_lang_label"))
-        self.model_label.config(text=self.get_text("model_label"))
-        self.parallel_label.config(text=self.get_text("parallel_label"))
-        
-        # 更新複選框文字
-        self.clean_mode_check.config(text=self.get_text("auto_clean"))
-        self.debug_mode_check.config(text=self.get_text("debug_mode"))
-        self.auto_clean_workspace_check.config(text=self.get_text("clean_workspace"))
-        self.replace_original_check.config(text=self.get_text("replace_original"))
+        if hasattr(self, "youtube_urls_label"):
+            self.youtube_urls_label.config(text=self.get_text("youtube_urls"))
+        if hasattr(self, "add_urls_button"):
+            self.add_urls_button.config(text=self.get_text("add_urls_to_queue"))
+        if hasattr(self, "select_audio_button"):
+            self.select_audio_button.config(text=self.get_text("select_audio_files"))
+        if hasattr(self, "clear_queue_button"):
+            self.clear_queue_button.config(text=self.get_text("clear_queue"))
+        if hasattr(self, "start_queue_button"):
+            self.start_queue_button.config(text=self.get_text("start_queue"))
+        if hasattr(self, "stop_queue_button"):
+            self.stop_queue_button.config(text=self.get_text("stop_queue"))
+        if hasattr(self, "enable_translation_check"):
+            self.enable_translation_check.config(text=self.get_text("enable_translation"))
 
-        # 更新下拉選單選項
-        current_source = self.source_lang.get()
-        current_target = self.target_lang.get()
-        
-        # 更新語言選項
-        source_options = self.translations[self.current_language.get()]["source_lang_options"]
-        target_options = self.translations[self.current_language.get()]["target_lang_options"]
-        
-        self.source_lang['values'] = source_options
-        self.target_lang['values'] = target_options
-        
-        # 保持選擇的值，但轉換語言
-        if self.current_language.get() == "en":
-            if current_source == "日文":
-                self.source_lang.set("Japanese")
-            elif current_source == "英文":
-                self.source_lang.set("English")
-            elif current_source == "自動偵測":
-                self.source_lang.set("Auto Detect")
-                
-            if current_target == "繁體中文":
-                self.target_lang.set("Traditional Chinese")
-            elif current_target == "英文":
-                self.target_lang.set("English")
-            elif current_target == "日文":
-                self.target_lang.set("Japanese")
-        else:
-            if current_source == "Japanese":
-                self.source_lang.set("日文")
-            elif current_source == "English":
-                self.source_lang.set("英文")
-            elif current_source == "Auto Detect":
-                self.source_lang.set("自動偵測")
-                
-            if current_target == "Traditional Chinese":
-                self.target_lang.set("繁體中文")
-            elif current_target == "English":
-                self.target_lang.set("英文")
-            elif current_target == "Japanese":
-                self.target_lang.set("日文")
+        if hasattr(self, "target_lang_label"):
+            self.target_lang_label.config(text=self.get_text("target_lang_label"))
+        if hasattr(self, "model_label"):
+            self.model_label.config(text=self.get_text("model_label"))
+        if hasattr(self, "parallel_label"):
+            self.parallel_label.config(text=self.get_text("parallel_label"))
+
+        if hasattr(self, "use_gpu_check"):
+            self.use_gpu_check.config(text=self.get_text("use_gpu"))
+        if hasattr(self, "gpu_backend_label"):
+            self.gpu_backend_label.config(text=self.get_text("gpu_backend"))
+        if hasattr(self, "asr_lang_label"):
+            self.asr_lang_label.config(text=self.get_text("asr_language_label"))
+        if hasattr(self, "output_format_label"):
+            self.output_format_label.config(text=self.get_text("output_format"))
+
+        if hasattr(self, "asr_lang"):
+            self.asr_lang['values'] = self.translations[self.current_language.get()]["asr_language_options"]
+        if hasattr(self, "target_lang"):
+            self.target_lang['values'] = self.translations[self.current_language.get()]["target_lang_options"]
 
     def create_widgets(self):
         # 頂部控制框架（語言切換）
@@ -256,22 +257,9 @@ class App(tk.Tk):
         )
         self.lang_button.pack(padx=5)
 
-        # 創建標籤頁（Notebook）
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-
-        # 創建兩個標籤頁
-        self.translate_tab = ttk.Frame(self.notebook)
-        self.asr_tab = ttk.Frame(self.notebook)
-
-        self.notebook.add(self.translate_tab, text=self.get_text("translate_tab"))
-        self.notebook.add(self.asr_tab, text=self.get_text("asr_tab"))
-
-        # 創建翻譯標籤頁的內容
-        self._create_translate_tab()
-
-        # 創建 ASR 標籤頁的內容
-        self._create_asr_tab()
+        content_frame = ttk.Frame(self)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        self._create_single_page(content_frame)
 
         # 進度條框架（標籤頁外）
         progress_frame = ttk.Frame(self)
@@ -288,6 +276,247 @@ class App(tk.Tk):
         # 狀態標籤
         self.status_label = ttk.Label(status_frame, text="", wraplength=550, justify="center")
         self.status_label.pack(fill=tk.BOTH, expand=True)
+
+    def _create_single_page(self, parent):
+        sources_frame = ttk.LabelFrame(parent, text=self.get_text("sources_section"))
+        sources_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        url_frame = ttk.Frame(sources_frame)
+        url_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.youtube_urls_label = ttk.Label(url_frame, text=self.get_text("youtube_urls"))
+        self.youtube_urls_label.pack(anchor="w")
+
+        self.url_text = tk.Text(url_frame, height=4)
+        self.url_text.pack(fill=tk.X, pady=2)
+
+        source_buttons = ttk.Frame(sources_frame)
+        source_buttons.pack(fill=tk.X, padx=10, pady=5)
+
+        self.add_urls_button = ttk.Button(
+            source_buttons,
+            text=self.get_text("add_urls_to_queue"),
+            command=self.add_urls_to_queue,
+        )
+        self.add_urls_button.pack(side=tk.LEFT, padx=5)
+
+        self.select_audio_button = ttk.Button(
+            source_buttons,
+            text=self.get_text("select_audio_files"),
+            command=self.select_audio_files,
+        )
+        self.select_audio_button.pack(side=tk.LEFT, padx=5)
+
+        queue_frame = ttk.LabelFrame(parent, text=self.get_text("queue_section"))
+        queue_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        self.queue_list = tk.Listbox(queue_frame, width=70, height=6, selectmode=tk.SINGLE)
+        self.queue_list.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        queue_buttons = ttk.Frame(queue_frame)
+        queue_buttons.pack(fill=tk.X, padx=10, pady=5)
+
+        self.clear_queue_button = ttk.Button(
+            queue_buttons,
+            text=self.get_text("clear_queue"),
+            command=self.clear_queue,
+        )
+        self.clear_queue_button.pack(side=tk.LEFT, padx=5)
+
+        asr_frame = ttk.LabelFrame(parent, text=self.get_text("asr_section"))
+        asr_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self._create_asr_settings(asr_frame)
+
+        translation_frame = ttk.LabelFrame(parent, text=self.get_text("translation_section"))
+        translation_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.enable_translation_var = tk.BooleanVar(value=False)
+        self.enable_translation_check = ttk.Checkbutton(
+            translation_frame,
+            text=self.get_text("enable_translation"),
+            variable=self.enable_translation_var,
+            command=self.toggle_translation_options,
+        )
+        self.enable_translation_check.pack(anchor="w", padx=10, pady=5)
+
+        self.translation_options_frame = ttk.Frame(translation_frame)
+        self.translation_options_frame.pack(fill=tk.X, padx=10, pady=5)
+        self._create_translation_settings(self.translation_options_frame)
+
+        output_frame = ttk.LabelFrame(parent, text=self.get_text("output_section"))
+        output_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self._create_output_settings(output_frame)
+
+        control_frame = ttk.Frame(parent)
+        control_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.start_queue_button = ttk.Button(
+            control_frame,
+            text=self.get_text("start_queue"),
+            command=self.start_queue,
+        )
+        self.start_queue_button.pack(side=tk.LEFT, padx=5)
+
+        self.stop_queue_button = ttk.Button(
+            control_frame,
+            text=self.get_text("stop_queue"),
+            command=self.stop_queue,
+        )
+        self.stop_queue_button.pack(side=tk.LEFT, padx=5)
+
+        self.toggle_translation_options()
+
+    def _create_asr_settings(self, parent):
+        asr_model_frame = ttk.LabelFrame(parent, text="Whisper 模型設定")
+        asr_model_frame.pack(pady=5, padx=10, fill=tk.X)
+
+        model_path_frame = ttk.Frame(asr_model_frame)
+        model_path_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.asr_model_label = ttk.Label(model_path_frame, text=self.get_text("whisper_model_label"))
+        self.asr_model_label.pack(side=tk.LEFT, padx=5)
+
+        self.asr_model_path = ttk.Entry(model_path_frame)
+        self.asr_model_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.asr_model_path.insert(0, "whisper.cpp/models/for-tests-ggml-base.bin")
+
+        self.browse_model_button = ttk.Button(
+            model_path_frame,
+            text="瀏覽",
+            command=self.browse_model
+        )
+        self.browse_model_button.pack(side=tk.LEFT, padx=5)
+
+        gpu_frame = ttk.Frame(asr_model_frame)
+        gpu_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.use_gpu_var = tk.BooleanVar(value=True)
+        self.use_gpu_check = ttk.Checkbutton(
+            gpu_frame,
+            text=self.get_text("use_gpu"),
+            variable=self.use_gpu_var
+        )
+        self.use_gpu_check.pack(side=tk.LEFT, padx=5)
+
+        self.gpu_backend_label = ttk.Label(gpu_frame, text=self.get_text("gpu_backend"))
+        self.gpu_backend_label.pack(side=tk.LEFT, padx=5)
+
+        self.gpu_backend = ttk.Combobox(
+            gpu_frame,
+            values=self.translations[self.current_language.get()]["gpu_backend_options"]
+        )
+        self.gpu_backend.set("auto")
+        self.gpu_backend.pack(side=tk.LEFT, padx=5)
+
+        transcribe_frame = ttk.LabelFrame(parent, text="轉錄設定")
+        transcribe_frame.pack(pady=5, padx=10, fill=tk.X)
+
+        lang_select_frame = ttk.Frame(transcribe_frame)
+        lang_select_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.asr_lang_label = ttk.Label(lang_select_frame, text=self.get_text("asr_language_label"))
+        self.asr_lang_label.pack(side=tk.LEFT, padx=5)
+
+        self.asr_lang = ttk.Combobox(
+            lang_select_frame,
+            values=self.translations[self.current_language.get()]["asr_language_options"]
+        )
+        self.asr_lang.set("自動偵測")
+        self.asr_lang.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        output_format_frame = ttk.Frame(transcribe_frame)
+        output_format_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.output_format_label = ttk.Label(output_format_frame, text=self.get_text("output_format"))
+        self.output_format_label.pack(side=tk.LEFT, padx=5)
+
+        self.output_format = ttk.Combobox(
+            output_format_frame,
+            values=self.translations[self.current_language.get()]["output_format_options"]
+        )
+        self.output_format.set("srt")
+        self.output_format.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+    def _create_translation_settings(self, parent):
+        lang_frame = ttk.Frame(parent)
+        lang_frame.pack(pady=5, fill=tk.X)
+
+        self.target_lang_label = ttk.Label(lang_frame, text=self.get_text("target_lang_label"))
+        self.target_lang_label.grid(row=0, column=0, padx=5)
+        self.target_lang = ttk.Combobox(
+            lang_frame,
+            values=self.translations[self.current_language.get()]["target_lang_options"]
+        )
+        self.target_lang.set(self.translations[self.current_language.get()]["target_lang_options"][0])
+        self.target_lang.grid(row=0, column=1, padx=5)
+
+        model_frame = ttk.Frame(parent)
+        model_frame.pack(pady=5, fill=tk.X)
+
+        self.model_label = ttk.Label(model_frame, text=self.get_text("model_label"))
+        self.model_label.grid(row=0, column=0, padx=5)
+        self.model_combo = ttk.Combobox(model_frame, values=self.get_model_list())
+        self.model_combo.set("gpt-oss:20b")
+        self.model_combo.grid(row=0, column=1, padx=5)
+
+        self.parallel_label = ttk.Label(model_frame, text=self.get_text("parallel_label"))
+        self.parallel_label.grid(row=0, column=2, padx=5)
+        self.parallel_requests = ttk.Combobox(
+            model_frame,
+            values=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "15", "20"]
+        )
+        self.parallel_requests.set("10")
+        self.parallel_requests.grid(row=0, column=3, padx=5)
+
+        checkbox_frame = ttk.Frame(parent)
+        checkbox_frame.pack(pady=5, fill=tk.X)
+
+        self.replace_original_check = ttk.Checkbutton(
+            checkbox_frame,
+            text=self.get_text("replace_original"),
+            variable=self.replace_original_var
+        )
+        self.replace_original_check.pack(side=tk.LEFT, padx=5)
+
+        self.use_alt_prompt_check = ttk.Checkbutton(
+            checkbox_frame,
+            text="使用替代提示詞",
+            variable=self.use_alt_prompt_var
+        )
+        self.use_alt_prompt_check.pack(side=tk.LEFT, padx=5)
+
+    def _create_output_settings(self, parent):
+        output_path_frame = ttk.Frame(parent)
+        output_path_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.asr_output_path_label = ttk.Label(output_path_frame, text="輸出資料夾：")
+        self.asr_output_path_label.pack(side=tk.LEFT, padx=5)
+
+        self.asr_output_path = ttk.Entry(output_path_frame)
+        self.asr_output_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.asr_output_path.insert(0, "transcriptions")
+
+        self.browse_output_button = ttk.Button(
+            output_path_frame,
+            text="瀏覽",
+            command=self.browse_output_dir
+        )
+        self.browse_output_button.pack(side=tk.LEFT, padx=5)
+
+    def toggle_translation_options(self):
+        state = "normal" if self.enable_translation_var.get() else "disabled"
+        for child in self.translation_options_frame.winfo_children():
+            self._set_widget_state(child, state)
+
+    def _set_widget_state(self, widget, state):
+        try:
+            widget.configure(state=state)
+        except tk.TclError:
+            pass
+        for child in getattr(widget, "winfo_children", lambda: [])():
+            self._set_widget_state(child, state)
 
     def _create_translate_tab(self):
         """創建翻譯標籤頁內容"""
@@ -574,6 +803,47 @@ class App(tk.Tk):
         logger.debug("File picker selected count=%s", len(files))
         for file in files:
             self.file_list.insert(tk.END, file)
+
+    def add_urls_to_queue(self):
+        logger.debug("Add URLs to queue requested")
+        urls = self.url_text.get("1.0", tk.END).strip()
+        if not urls:
+            return
+        for line in urls.splitlines():
+            line = line.strip()
+            if line:
+                self.queue_list.insert(tk.END, f"url: {line}")
+
+    def select_audio_files(self):
+        file_paths = filedialog.askopenfilenames(
+            title="選擇音訊檔案",
+            filetypes=[
+                ("Audio files", "*.wav *.mp3 *.m4a *.flac *.ogg *.wma"),
+                ("All files", "*.*")
+            ]
+        )
+        if not file_paths:
+            return
+        for path in file_paths:
+            self.queue_list.insert(tk.END, f"file: {path}")
+        logger.debug("Audio files selected count=%s", len(file_paths))
+
+    def clear_queue(self):
+        self.queue_list.delete(0, tk.END)
+        logger.debug("Queue cleared")
+
+    def start_queue(self):
+        logger.info("Start queue requested")
+
+    def stop_queue(self):
+        logger.info("Stop queue requested")
+
+    def browse_output_dir(self):
+        directory = filedialog.askdirectory(title="選擇輸出資料夾")
+        if directory:
+            self.asr_output_path.delete(0, tk.END)
+            self.asr_output_path.insert(0, directory)
+            logger.debug("Output directory selected: %s", directory)
 
     # ========== ASR Methods ==========
     def select_audio(self):
