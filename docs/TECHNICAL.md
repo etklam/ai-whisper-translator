@@ -233,6 +233,14 @@ Notable test areas:
 - ASR WhisperWrapper initialization
 - ASR coordinator workflow
 
+### Manual Validation (Single-Page Workflow)
+
+1. Batch YouTube URLs queue -> sequential download + transcribe.
+2. Batch local audio files -> sequential transcribe.
+3. Enable translation -> ASR output SRT translated.
+4. One item failure does not stop the queue.
+5. Stop halts queue processing after current item.
+
 ### ASR Testing Scripts
 
 - `test_imports.py`: ASR module import tests
