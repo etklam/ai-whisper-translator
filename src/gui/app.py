@@ -36,6 +36,9 @@ def _pop_next_queue_item(queue_items):
 def _queue_item_label(item):
     return f"{item['kind']}: {item['value']}"
 
+def _should_translate(flag):
+    return bool(flag)
+
 class App(tk.Tk):
     def __init__(self, coordinator=None, asr_coordinator=None):
         super().__init__()
@@ -899,6 +902,8 @@ class App(tk.Tk):
 
                 output_path = self._resolve_asr_output_path(audio_path)
                 self._run_asr_request(audio_path, output_path)
+                if _should_translate(self.enable_translation_var.get()):
+                    self._run_translation_for_output(output_path, index)
                 self.after(0, lambda: self._on_queue_item_done(index, True, output_path))
             except Exception as exc:
                 logger.error("Queue item failed index=%s error=%s", index, exc)
@@ -954,6 +959,27 @@ class App(tk.Tk):
         base_name = os.path.splitext(os.path.basename(audio_path))[0]
         ext = self.output_format.get()
         return os.path.join(output_dir, f"{base_name}.{ext}")
+
+    def _run_translation_for_output(self, output_path, index):
+        if not output_path.lower().endswith(".srt"):
+            logger.warning("Translation skipped (non-srt) path=%s", output_path)
+            return
+        self.after(0, lambda: self.status_label.config(text=f"翻譯中 {index}/{self.queue_total}"))
+        thread = TranslationThread(
+            output_path,
+            "自動偵測",
+            self.target_lang.get(),
+            self.model_combo.get(),
+            self.parallel_requests.get(),
+            self.update_progress,
+            self.file_translated,
+            self.debug_mode_var.get(),
+            self.replace_original_var.get(),
+            self.use_alt_prompt_var.get()
+        )
+        thread.set_app(self)
+        thread.start()
+        thread.join()
 
     def _on_queue_item_done(self, index, success, message):
         if success:
