@@ -28,6 +28,14 @@ def _build_source_queue(urls, files):
 def _parse_urls(text):
     return [line.strip() for line in text.splitlines() if line.strip()]
 
+def _pop_next_queue_item(queue_items):
+    if not queue_items:
+        return None
+    return queue_items.pop(0)
+
+def _queue_item_label(item):
+    return f"{item['kind']}: {item['value']}"
+
 class App(tk.Tk):
     def __init__(self, coordinator=None, asr_coordinator=None):
         super().__init__()
@@ -188,6 +196,9 @@ class App(tk.Tk):
         self.auto_clean_workspace_var = tk.BooleanVar(value=True)
         self.replace_original_var = tk.BooleanVar(value=False)
         self.use_alt_prompt_var = tk.BooleanVar(value=False)  # Add this line
+        self.queue_items = []
+        self.queue_total = 0
+        self.is_running = False
 
         self.create_widgets()
         self.create_clean_menu()
@@ -811,7 +822,9 @@ class App(tk.Tk):
         logger.debug("Add URLs to queue requested")
         urls = self.url_text.get("1.0", tk.END)
         for line in _parse_urls(urls):
-            self.queue_list.insert(tk.END, f"url: {line}")
+            item = {"kind": "url", "value": line}
+            self.queue_items.append(item)
+            self.queue_list.insert(tk.END, _queue_item_label(item))
 
     def select_audio_files(self):
         file_paths = filedialog.askopenfilenames(
@@ -824,18 +837,33 @@ class App(tk.Tk):
         if not file_paths:
             return
         for path in file_paths:
-            self.queue_list.insert(tk.END, f"file: {path}")
+            item = {"kind": "file", "value": path}
+            self.queue_items.append(item)
+            self.queue_list.insert(tk.END, _queue_item_label(item))
         logger.debug("Audio files selected count=%s", len(file_paths))
 
     def clear_queue(self):
         self.queue_list.delete(0, tk.END)
+        self.queue_items = []
+        self.queue_total = 0
         logger.debug("Queue cleared")
 
     def start_queue(self):
         logger.info("Start queue requested")
+        if self.is_running:
+            return
+        if self.url_text.get("1.0", tk.END).strip():
+            self.add_urls_to_queue()
+        if not self.queue_items:
+            messagebox.showwarning("提示", "請先加入待處理項目")
+            return
+        self.is_running = True
+        self.queue_total = len(self.queue_items)
+        self._process_next_queue_item()
 
     def stop_queue(self):
         logger.info("Stop queue requested")
+        self.is_running = False
 
     def browse_output_dir(self):
         directory = filedialog.askdirectory(title="選擇輸出資料夾")
@@ -843,6 +871,98 @@ class App(tk.Tk):
             self.asr_output_path.delete(0, tk.END)
             self.asr_output_path.insert(0, directory)
             logger.debug("Output directory selected: %s", directory)
+
+    def _process_next_queue_item(self):
+        if not self.is_running:
+            return
+        item = _pop_next_queue_item(self.queue_items)
+        if item is None:
+            self.is_running = False
+            self.status_label.config(text="佇列完成")
+            return
+        current_index = self.queue_total - len(self.queue_items)
+        self.status_label.config(text=f"處理中 {current_index}/{self.queue_total}")
+        self._run_queue_item(item, current_index)
+
+    def _run_queue_item(self, item, index):
+        def _run():
+            try:
+                if item["kind"] == "url":
+                    from src.asr.audio_downloader import AudioDownloader
+                    downloader = AudioDownloader(output_dir="downloads")
+                    audio_path = downloader.download_audio_to_wav(item["value"])
+                else:
+                    audio_path = item["value"]
+
+                if not audio_path or not os.path.exists(audio_path):
+                    raise FileNotFoundError(f"音訊檔案不存在：{audio_path}")
+
+                output_path = self._resolve_asr_output_path(audio_path)
+                self._run_asr_request(audio_path, output_path)
+                self.after(0, lambda: self._on_queue_item_done(index, True, output_path))
+            except Exception as exc:
+                logger.error("Queue item failed index=%s error=%s", index, exc)
+                self.after(0, lambda: self._on_queue_item_done(index, False, str(exc)))
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+
+    def _run_asr_request(self, audio_path, output_path):
+        if not self.asr_coordinator:
+            raise RuntimeError(self.get_text("asr_not_available"))
+
+        from src.application.asr_coordinator import ASRRequest
+
+        language_map = {
+            "自動偵測": None,
+            "英文": "en",
+            "繁體中文": "zh",
+            "簡體中文": "zh",
+            "日文": "ja",
+            "韓文": "ko",
+            "法文": "fr",
+            "德文": "de",
+            "西班牙文": "es",
+            "Auto Detect": None,
+            "English": "en",
+            "Traditional Chinese": "zh",
+            "Simplified Chinese": "zh",
+            "Japanese": "ja",
+            "Korean": "ko",
+            "French": "fr",
+            "German": "de",
+            "Spanish": "es",
+        }
+        language = language_map.get(self.asr_lang.get(), None)
+
+        request = ASRRequest(
+            input_path=audio_path,
+            output_path=output_path,
+            model_path=self.asr_model_path.get(),
+            language=language,
+            use_gpu=self.use_gpu_var.get(),
+            gpu_backend=self.gpu_backend.get(),
+            n_threads=4,
+            output_format=self.output_format.get(),
+            max_retries=1
+        )
+        self.asr_coordinator.run(request)
+
+    def _resolve_asr_output_path(self, audio_path):
+        output_dir = self.asr_output_path.get().strip() or "transcriptions"
+        os.makedirs(output_dir, exist_ok=True)
+        base_name = os.path.splitext(os.path.basename(audio_path))[0]
+        ext = self.output_format.get()
+        return os.path.join(output_dir, f"{base_name}.{ext}")
+
+    def _on_queue_item_done(self, index, success, message):
+        if success:
+            self.status_label.config(text=f"完成 {index}/{self.queue_total}")
+        else:
+            self.status_label.config(text=f"失敗 {index}/{self.queue_total}: {message}")
+
+        if self.is_running:
+            self._process_next_queue_item()
 
     # ========== ASR Methods ==========
     def select_audio(self):
