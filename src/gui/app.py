@@ -39,6 +39,9 @@ def _queue_item_label(item):
 def _should_translate(flag):
     return bool(flag)
 
+def _queue_status_text(current, total, status):
+    return f"{current}/{total} - {status}"
+
 class App(tk.Tk):
     def __init__(self, coordinator=None, asr_coordinator=None):
         super().__init__()
@@ -884,7 +887,7 @@ class App(tk.Tk):
             self.status_label.config(text="佇列完成")
             return
         current_index = self.queue_total - len(self.queue_items)
-        self.status_label.config(text=f"處理中 {current_index}/{self.queue_total}")
+        self.status_label.config(text=_queue_status_text(current_index, self.queue_total, "處理中"))
         self._run_queue_item(item, current_index)
 
     def _run_queue_item(self, item, index):
@@ -964,7 +967,12 @@ class App(tk.Tk):
         if not output_path.lower().endswith(".srt"):
             logger.warning("Translation skipped (non-srt) path=%s", output_path)
             return
-        self.after(0, lambda: self.status_label.config(text=f"翻譯中 {index}/{self.queue_total}"))
+        self.after(
+            0,
+            lambda: self.status_label.config(
+                text=_queue_status_text(index, self.queue_total, "翻譯中")
+            )
+        )
         thread = TranslationThread(
             output_path,
             "自動偵測",
@@ -983,9 +991,11 @@ class App(tk.Tk):
 
     def _on_queue_item_done(self, index, success, message):
         if success:
-            self.status_label.config(text=f"完成 {index}/{self.queue_total}")
+            self.status_label.config(text=_queue_status_text(index, self.queue_total, "完成"))
         else:
-            self.status_label.config(text=f"失敗 {index}/{self.queue_total}: {message}")
+            self.status_label.config(
+                text=f"{_queue_status_text(index, self.queue_total, '失敗')}: {message}"
+            )
 
         if self.is_running:
             self._process_next_queue_item()
