@@ -17,6 +17,14 @@ from src.translation.translation_thread import TranslationThread
 
 logger = logging.getLogger(__name__)
 
+def _build_source_queue(urls, files):
+    queue = []
+    for url in urls:
+        queue.append({"kind": "url", "value": url})
+    for path in files:
+        queue.append({"kind": "file", "value": path})
+    return queue
+
 class App(tk.Tk):
     def __init__(self, coordinator=None, asr_coordinator=None):
         super().__init__()
