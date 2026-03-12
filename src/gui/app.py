@@ -25,6 +25,9 @@ def _build_source_queue(urls, files):
         queue.append({"kind": "file", "value": path})
     return queue
 
+def _parse_urls(text):
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
 class App(tk.Tk):
     def __init__(self, coordinator=None, asr_coordinator=None):
         super().__init__()
@@ -806,13 +809,9 @@ class App(tk.Tk):
 
     def add_urls_to_queue(self):
         logger.debug("Add URLs to queue requested")
-        urls = self.url_text.get("1.0", tk.END).strip()
-        if not urls:
-            return
-        for line in urls.splitlines():
-            line = line.strip()
-            if line:
-                self.queue_list.insert(tk.END, f"url: {line}")
+        urls = self.url_text.get("1.0", tk.END)
+        for line in _parse_urls(urls):
+            self.queue_list.insert(tk.END, f"url: {line}")
 
     def select_audio_files(self):
         file_paths = filedialog.askopenfilenames(
