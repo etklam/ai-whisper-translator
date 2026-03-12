@@ -831,6 +831,7 @@ class App(tk.Tk):
             item = {"kind": "url", "value": line}
             self.queue_items.append(item)
             self.queue_list.insert(tk.END, _queue_item_label(item))
+        self.url_text.delete("1.0", tk.END)
 
     def select_audio_files(self):
         file_paths = filedialog.askopenfilenames(
