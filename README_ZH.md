@@ -20,6 +20,24 @@
 - GPU 加速（Metal, CUDA, HIP, Vulkan, OpenCL, CPU）
 - 多種輸出格式（SRT, TXT, JSON, Verbose）
 
+## 開發進度（截至 2026-03-14）
+
+已完成並可用：
+- 透過 Ollama chat completions 進行 SRT 翻譯
+- 批次匯入 + 重複檔案過濾 + 拖放匯入（tkinterdnd2）
+- 翻譯選項：清理、覆蓋/重新命名/跳過、覆寫備份
+- 透過 whisper.cpp 進行 ASR 轉錄（本機模型）
+- YouTube 音訊下載（yt-dlp）與音訊轉換流程
+- GPU 後端支援並可自動降級到 CPU
+- 多種輸出格式（SRT/TXT/JSON/Verbose）
+- uv 優先、pip 相容的安裝流程
+
+進行中 / 下一步重點：
+- 將舊版字幕翻譯 thread 流程完整併入 coordinator
+- UI 文案與語言一致性整理
+- macOS/Windows 打包（已存在 PyInstaller 規格）
+- 增加 GUI + ASR 邊界案例測試
+
 ## 先決條件
 
 - Python 3.10 以上

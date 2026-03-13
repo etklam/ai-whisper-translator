@@ -13,6 +13,21 @@ This document is for maintainers and contributors.
   - `pyproject.toml` + `uv.lock` for uv sync/run
   - `requirements.txt` preserved for pip-based installs
 
+## 1.1 Development Status (2026-03-14)
+
+Implemented and working:
+- SRT translation via Ollama chat completions
+- ASR transcription via whisper.cpp (local models)
+- YouTube audio download + conversion pipeline
+- GPU backends with CPU fallback
+- Multiple output formats (SRT/TXT/JSON/Verbose)
+- uv-first workflow with pip fallback
+
+In progress / next focus:
+- Migrate legacy `TranslationThread` flow into coordinator path
+- Packaging (PyInstaller specs exist for macOS/Windows)
+- UI copy and language normalization
+
 ## 2. Runtime Architecture
 
 Current startup path:

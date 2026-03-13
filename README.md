@@ -20,6 +20,24 @@ Use this README for first-time setup and your first successful use. For architec
 - GPU acceleration (Metal, CUDA, HIP, Vulkan, OpenCL, CPU)
 - Multiple output formats (SRT, TXT, JSON, Verbose)
 
+## Development Status (as of 2026-03-14)
+
+Implemented and working:
+- SRT translation via Ollama chat completions
+- Batch file import + duplicate filtering + drag-and-drop (tkinterdnd2)
+- Translation options: cleanup, overwrite/rename/skip, backup on replace
+- ASR transcription via whisper.cpp (local models)
+- YouTube audio download (yt-dlp) and audio conversion pipeline
+- GPU backends with graceful CPU fallback
+- Multiple output formats (SRT/TXT/JSON/Verbose)
+- uv-first workflow with pip fallback
+
+In progress / next focus:
+- Unify legacy subtitle translation thread into the coordinator path
+- UI copy and language consistency cleanup
+- Packaging for macOS/Windows (PyInstaller specs exist)
+- Expand test coverage for GUI + ASR edge cases
+
 ## Prerequisites
 
 - Python 3.10+

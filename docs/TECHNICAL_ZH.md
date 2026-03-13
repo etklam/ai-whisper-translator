@@ -13,6 +13,21 @@
   - `pyproject.toml` + `uv.lock` 供 uv 同步與執行
   - `requirements.txt` 保留給 pip 安裝路徑
 
+## 1.1 開發進度（截至 2026-03-14）
+
+已完成並可用：
+- 透過 Ollama chat completions 進行 SRT 翻譯
+- 透過 whisper.cpp 進行 ASR 轉錄（本機模型）
+- YouTube 音訊下載與轉換流程
+- GPU 後端支援並可降級到 CPU
+- 多種輸出格式（SRT/TXT/JSON/Verbose）
+- uv 優先、pip 相容流程
+
+進行中 / 下一步重點：
+- 舊版 `TranslationThread` 流程併入 coordinator
+- 打包流程（已存在 macOS/Windows 的 PyInstaller 規格）
+- UI 文案與語言一致性整理
+
 ## 2. 執行期架構
 
 啟動流程：
