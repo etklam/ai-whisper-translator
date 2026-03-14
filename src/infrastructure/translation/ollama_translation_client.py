@@ -4,33 +4,38 @@ import os
 import urllib.request
 import urllib.error
 
+from src.application.endpoint_policy import build_models_endpoint, validate_openai_endpoint
 from src.domain.errors import ExternalServiceError
+from src.infrastructure.runtime.logging_config import redact_endpoint
 
 logger = logging.getLogger(__name__)
 
 
 class OllamaTranslationClient:
     def __init__(self, endpoint: str | None = None, api_key: str | None = None, timeout: int = 30):
-        self.endpoint = self._normalize_endpoint(
+        resolution = validate_openai_endpoint(
             endpoint
             or os.getenv("OPENAI_COMPAT_ENDPOINT")
             or os.getenv("OLLAMA_ENDPOINT")
-            or "http://localhost:11434/v1/chat/completions"
+            or None
         )
+        self.endpoint = resolution.endpoint
         self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("OLLAMA_API_KEY", "")
         self.timeout = timeout
-        logger.debug("OllamaTranslationClient initialized endpoint=%s timeout=%s", self.endpoint, self.timeout)
+        logger.debug(
+            "OllamaTranslationClient initialized endpoint=%s timeout=%s local=%s",
+            redact_endpoint(self.endpoint),
+            self.timeout,
+            resolution.is_local,
+        )
 
     @staticmethod
     def _normalize_endpoint(endpoint: str) -> str:
-        endpoint = endpoint.rstrip("/")
-        if endpoint.endswith("/v1/chat/completions"):
-            return endpoint
-        if endpoint.endswith("/v1"):
-            return f"{endpoint}/chat/completions"
-        if endpoint.endswith("/chat/completions"):
-            return endpoint
-        return f"{endpoint}/v1/chat/completions"
+        return validate_openai_endpoint(endpoint).endpoint
+
+    @staticmethod
+    def build_models_endpoint(endpoint: str | None) -> str:
+        return build_models_endpoint(endpoint)
 
     def translate_text(
         self,
@@ -42,7 +47,7 @@ class OllamaTranslationClient:
     ) -> str:
         logger.debug(
             "Sending translation request endpoint=%s model=%s target_lang=%s text_len=%s prompt_len=%s",
-            self.endpoint,
+            redact_endpoint(self.endpoint),
             model_name,
             target_lang,
             len(text),
@@ -67,25 +72,25 @@ class OllamaTranslationClient:
             headers=headers,
         )
         try:
-            logger.debug("Sending HTTP request to Ollama...")
+            logger.debug("Sending HTTP request to OpenAI-compatible endpoint")
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                logger.debug("Ollama response received")
+                logger.debug("OpenAI-compatible response received")
                 result = json.loads(response.read().decode("utf-8"))
                 content = result["choices"][0]["message"]["content"].strip()
                 logger.debug("Translation response parsed content_len=%s", len(content))
                 logger.info("Translation successful input_len=%s output_len=%s", len(text), len(content))
                 return content
         except urllib.error.HTTPError as exc:
-            logger.error("HTTP error from Ollama status=%s reason=%s", exc.code, exc.reason)
+            logger.error("HTTP error from OpenAI-compatible endpoint status=%s reason=%s", exc.code, exc.reason)
             raise ExternalServiceError(f"Ollama HTTP error {exc.code}: {exc.reason}") from exc
         except urllib.error.URLError as exc:
-            logger.error("URL error connecting to Ollama error=%s", exc.reason)
+            logger.error("URL error connecting to OpenAI-compatible endpoint error=%s", exc.reason)
             raise ExternalServiceError(f"Cannot connect to Ollama: {exc.reason}") from exc
         except json.JSONDecodeError as exc:
-            logger.error("Invalid JSON response from Ollama error=%s", exc)
+            logger.error("Invalid JSON response from OpenAI-compatible endpoint error=%s", exc)
             raise ExternalServiceError("Invalid response from Ollama") from exc
         except KeyError as exc:
-            logger.error("Unexpected response structure from Ollama missing_key=%s", exc)
+            logger.error("Unexpected response structure from OpenAI-compatible endpoint missing_key=%s", exc)
             raise ExternalServiceError("Unexpected response format from Ollama") from exc
         except Exception as exc:
             logger.error("Translation request failed error=%s", exc)

@@ -23,10 +23,16 @@ This document summarizes the current repository layout and responsibilities.
 src/
 ├── main.py                  # Composition root (build coordinators + GUI)
 ├── gui/                     # Tkinter UI
-│   └── app.py               # Main UI (queue + AI engine panel)
+│   ├── app.py               # Main UI shell and widget event handlers
+│   ├── config/              # Settings persistence
+│   ├── presenters/          # Queue, language, completion, cleaning, translation runners
+│   ├── resources/           # I18n resources and loaders
+│   └── views/               # Focused panel builders
 ├── application/             # Orchestration layer
 │   ├── models.py            # Request dataclasses
 │   ├── events.py            # Progress events
+│   ├── endpoint_policy.py   # Local-first endpoint trust policy
+│   ├── path_validation.py   # Filesystem guard layer
 │   ├── translation_coordinator.py
 │   └── asr_coordinator.py
 ├── domain/                  # Protocols + domain errors
@@ -35,18 +41,18 @@ src/
 │   ├── prompt/              # JSON prompt provider
 │   └── subtitles/           # Pysrt repository
 ├── asr/                     # whisper.cpp integration + audio pipeline
-├── translation/             # Legacy translation thread + prompts.json
+├── translation/             # Prompt resources
 └── utils/                   # File utils, naming, cleanup
 ```
 
 ## Key Files
 
-- `src/gui/app.py`: GUI, queue workflow, AI engine panel, config persistence
+- `src/gui/app.py`: GUI shell and widget wiring
+- `src/gui/presenters/`: extracted GUI workflow logic
 - `src/translation/prompts.json`: default + per-language prompts
-- `.config` (repo root): GUI settings and prompt overrides
+- `.config` (repo root): GUI settings and prompt overrides, excluding API secrets
 
 ## Notes
 
-- `src/translation/translation_thread.py` is legacy but still used in some paths.
-- `src/application/translation_coordinator.py` is the preferred path for new work.
+- `src/application/translation_coordinator.py` is the single production translation path.
 - `src/*.ts` files are scaffolding and not part of the runtime.

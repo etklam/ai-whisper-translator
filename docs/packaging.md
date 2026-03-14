@@ -2,6 +2,12 @@
 
 This repo includes packaging placeholders and helper scripts.
 
+## Supported Entry Points
+
+- Installed script: `ai-whisper-translator`
+- Source dev command: `uv run ai-whisper-translator`
+- Thin wrappers: `python main.py` or `python -m src.main`
+
 ## Specs
 
 - `packaging/windows/pyinstaller.spec`
@@ -39,3 +45,9 @@ Options:
 - Windows: `cuda → hip → vulkan → cpu`
 - macOS (Apple Silicon): `metal → cpu`
 - Other: `cpu`
+
+## Runtime Assumptions
+
+- Startup performs no package installation or environment mutation.
+- Remote OpenAI-compatible endpoints are disabled unless `ALLOW_REMOTE_AI_ENDPOINTS=1`.
+- API keys are not persisted into `.config`.

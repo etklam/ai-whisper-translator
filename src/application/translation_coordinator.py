@@ -3,11 +3,13 @@ import os
 import shutil
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 import re
 
 import pysrt
 
 from src.application.events import ProgressEvent
+from src.application.path_validation import ensure_existing_file, ensure_output_file_path
 from src.domain.errors import ExternalServiceError
 from src.utils.file_utils import ensure_backup_dir
 
@@ -19,6 +21,7 @@ class ExecutionSummary:
     total_files: int
     successful_files: int
     failed_files: int
+    output_paths: list[str]
 
 
 class TranslationCoordinator:
@@ -38,6 +41,7 @@ class TranslationCoordinator:
     def run(self, request):
         successful = 0
         failed = 0
+        output_paths = []
         total = len(request.file_paths)
         logger.info(
             "Coordinator run started total_files=%s target_lang=%s model=%s retries=%s",
@@ -55,27 +59,28 @@ class TranslationCoordinator:
             file_failed = False
 
             try:
+                source_path = ensure_existing_file(file_path, allowed_suffixes=(".srt",))
                 if request.clean_before_translate:
                     logger.debug(
                         "Cleaning SRT before translate path=%s replace_original=%s",
-                        file_path,
+                        source_path,
                         request.replace_original,
                     )
                     self.subtitle_repo.clean_srt_file(
-                        file_path,
+                        str(source_path),
                         create_backup=request.replace_original,
                     )
                 elif request.replace_original:
-                    backup_dir = os.path.join(os.path.dirname(file_path), "backup")
+                    backup_dir = os.path.join(os.path.dirname(str(source_path)), "backup")
                     ensure_backup_dir(backup_dir)
-                    backup_path = os.path.join(backup_dir, os.path.basename(file_path))
-                    shutil.copy2(file_path, backup_path)
-                    logger.debug("Backup created for replace mode source=%s backup=%s", file_path, backup_path)
+                    backup_path = os.path.join(backup_dir, os.path.basename(str(source_path)))
+                    shutil.copy2(str(source_path), backup_path)
+                    logger.debug("Backup created for replace mode source=%s backup=%s", source_path, backup_path)
 
-                subs = pysrt.open(file_path)
+                subs = pysrt.open(str(source_path))
                 logger.info(
                     "Translating subtitles file=%s count=%s parallel=%s",
-                    file_path,
+                    source_path,
                     len(subs),
                     request.parallel_requests,
                 )
@@ -144,15 +149,19 @@ class TranslationCoordinator:
 
                 # Only save if all subtitles were successfully translated
                 if not file_failed:
-                    output_path = self.subtitle_repo.get_output_path(
-                        file_path,
-                        request.target_lang,
-                        replace_original=request.replace_original,
+                    output_path = self._resolve_output_path(
+                        str(source_path),
+                        request,
                     )
-                    subs.save(output_path, encoding="utf-8")
-                    logger.info("Saved translated file source=%s output=%s", file_path, output_path)
+                    if output_path is None:
+                        logger.info("Skipping save for file=%s due to output policy=%s", source_path, request.output_conflict_policy)
+                    else:
+                        safe_output_path = ensure_output_file_path(output_path, allowed_parent=source_path.parent)
+                        subs.save(str(safe_output_path), encoding="utf-8")
+                        output_paths.append(str(safe_output_path))
+                        logger.info("Saved translated file source=%s output=%s", source_path, safe_output_path)
                 else:
-                    logger.warning("Skipping save for file=%s due to translation failures", file_path)
+                    logger.warning("Skipping save for file=%s due to translation failures", source_path)
             except Exception:
                 file_failed = True
                 logger.exception("File translation failed path=%s", file_path)
@@ -182,6 +191,7 @@ class TranslationCoordinator:
             total_files=len(request.file_paths),
             successful_files=successful,
             failed_files=failed,
+            output_paths=output_paths,
         )
         logger.info(
             "Coordinator run completed total=%s successful=%s failed=%s",
@@ -258,3 +268,36 @@ class TranslationCoordinator:
         thread.start()
         logger.debug("Async translation thread launched thread=%s", thread.name)
         return thread
+
+    def _resolve_output_path(self, file_path, request):
+        output_path = self.subtitle_repo.get_output_path(
+            file_path,
+            request.target_lang,
+            replace_original=request.replace_original,
+        )
+        if request.replace_original:
+            return str(ensure_output_file_path(output_path, allowed_parent=Path(file_path).parent))
+
+        candidate = Path(output_path)
+        if not candidate.exists():
+            return str(candidate)
+
+        policy = (request.output_conflict_policy or "rename").strip().lower()
+        if policy == "overwrite":
+            return str(ensure_output_file_path(candidate, allowed_parent=candidate.parent))
+        if policy == "skip":
+            return None
+        if policy != "rename":
+            logger.warning("Unknown output conflict policy=%s, defaulting to rename", policy)
+
+        renamed = self._build_renamed_output_path(candidate)
+        logger.info("Resolved output conflict source=%s original=%s renamed=%s", file_path, candidate, renamed)
+        return str(ensure_output_file_path(renamed, allowed_parent=candidate.parent))
+
+    @staticmethod
+    def _build_renamed_output_path(candidate: Path) -> Path:
+        for counter in range(1, 10_000):
+            renamed = candidate.with_name(f"{candidate.stem}_{counter}{candidate.suffix}")
+            if not renamed.exists():
+                return renamed
+        raise RuntimeError(f"Unable to resolve output conflict for {candidate}")

@@ -11,7 +11,7 @@ This document is for maintainers and contributors.
 - TypeScript under `src/*.ts` is scaffolding and not in the runtime path.
 - Package management: uv-first with pip fallback.
 
-## 1.1 Development Status (2026-03-14)
+## 1.1 Development Status (2026-03-15)
 
 Implemented and working:
 - ASR transcription via whisper.cpp
@@ -22,9 +22,10 @@ Implemented and working:
 - GPU backends with CPU fallback
 - Multi-format outputs (SRT/TXT/JSON/Verbose)
 - Config persistence in `.config`
+- Typed settings store and extracted GUI presenters
+- Local-first endpoint policy and filesystem validation
 
 In progress / next focus:
-- Retire legacy translation-only UI and unify flows
 - Packaging for macOS/Windows
 - Expand GUI/ASR edge-case tests
 
@@ -43,8 +44,8 @@ Startup path:
 
 High-level flow:
 - GUI collects input and options.
-- GUI builds `TranslationRequest` and runs coordinator (when using coordinator path).
-- GUI also runs legacy `TranslationThread` for certain flows.
+- GUI presenters build `TranslationRequest` and run coordinator asynchronously.
+- Translation, ASR, queue, completion, and clean workflows are split into focused helpers.
 
 ## 3. Module Responsibilities
 
@@ -52,6 +53,8 @@ High-level flow:
 - `src/application/`
   - `models.py`: request models (`TranslationRequest`, `ASRRequest`)
   - `events.py`: progress events (`ProgressEvent`)
+  - `endpoint_policy.py`: normalize + validate OpenAI-compatible endpoints
+  - `path_validation.py`: file/path guard layer
   - `translation_coordinator.py`: translation orchestration + retries + batch tagging
   - `asr_coordinator.py`: ASR orchestration with whisper.cpp
 
@@ -77,9 +80,10 @@ High-level flow:
 - `src/gui/app.py`: Tkinter single-page UI
   - Left: queue (or AI Engine panel)
   - Right: ASR + Translation + Output settings
-
-### Legacy
-- `src/translation/translation_thread.py`: legacy thread-based translation
+- `src/gui/presenters/`: queue, translation runner, completion handling, clean workflow, UI language
+- `src/gui/views/`: focused widget-construction modules
+- `src/gui/config/settings_store.py`: typed settings IO boundary
+- `src/gui/resources/i18n.py`: translation loading
 
 ## 4. End-to-End Flows
 
@@ -96,15 +100,12 @@ High-level flow:
 - Coordinator performs batch-tagged requests to OpenAI-compatible endpoint.
 - Retries on `ExternalServiceError`.
 
-### Legacy Thread Path
-
-- `TranslationThread` still performs batch translation with conflict handling.
-
 ## 5. Configuration and Defaults
 
 ### Translation / AI Engine
 - OpenAI-compatible endpoint default: `http://localhost:11434/v1/chat/completions`
 - Env overrides: `OPENAI_COMPAT_ENDPOINT`, `OPENAI_API_KEY`
+- Remote endpoints are blocked unless `ALLOW_REMOTE_AI_ENDPOINTS=1`
 - LibreTranslate endpoint: `LIBRETRANSLATE_ENDPOINT`
 - Prompt file: `src/translation/prompts.json`
 - GUI prompt overrides stored in `.config`
@@ -117,6 +118,7 @@ High-level flow:
 
 ### Config Persistence
 - `.config` in repo root persists GUI state
+- API keys are intentionally excluded from persisted config
 - Includes AI engine settings and prompt overrides per UI language
 
 ## 6. Prompt System
@@ -137,7 +139,8 @@ High-level flow:
 
 - Translation output naming via `src/utils/file_utils.py`
 - Replace mode backs up original into `backup/`
-- GUI handles overwrite/rename/skip with countdown
+- Coordinator owns output conflict resolution; default policy is rename
+- Path validation runs before backup/save operations
 
 ## 9. Error Handling and Retry
 

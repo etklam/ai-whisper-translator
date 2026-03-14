@@ -2,10 +2,10 @@
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import List, Optional
 
 from src.application.events import ProgressEvent
+from src.application.path_validation import ensure_existing_file, ensure_output_file_path
 from src.domain.errors import ExternalServiceError
 
 
@@ -75,6 +75,9 @@ class ASRCoordinator:
 
         # Import transcriber here to avoid import errors if whisper.cpp is not available
         try:
+            input_path = ensure_existing_file(request.input_path)
+            model_path = ensure_existing_file(request.model_path, allowed_suffixes=(".bin",))
+            output_path = ensure_output_file_path(request.output_path)
             from src.asr.whisper_transcriber import Transcriber
 
             for attempt in range(request.max_retries + 1):
@@ -83,9 +86,9 @@ class ASRCoordinator:
 
                     # Initialize transcriber
                     logger.debug("Initializing transcriber model=%s gpu=%s backend=%s",
-                                request.model_path, request.use_gpu, request.gpu_backend)
+                                model_path, request.use_gpu, request.gpu_backend)
                     with Transcriber(
-                        model_path=request.model_path,
+                        model_path=str(model_path),
                         use_gpu=request.use_gpu,
                         gpu_backend=request.gpu_backend,
                     ) as transcriber:
@@ -117,7 +120,7 @@ class ASRCoordinator:
                         logger.debug("Starting transcription language=%s threads=%s",
                                     language or "auto", request.n_threads)
                         segments = transcriber.transcribe_file(
-                            audio_path=request.input_path,
+                            audio_path=str(input_path),
                             language=language,
                             n_threads=request.n_threads,
                             print_progress=False,
@@ -138,15 +141,15 @@ class ASRCoordinator:
                             )
                         )
 
-                        logger.debug("Saving output format=%s path=%s", request.output_format, request.output_path)
+                        logger.debug("Saving output format=%s path=%s", request.output_format, output_path)
                         self._save_output(
                             segments=segments,
-                            output_path=request.output_path,
+                            output_path=str(output_path),
                             format=request.output_format,
                             language=detected_lang,
                         )
 
-                        logger.info("ASR transcription successful path=%s", request.input_path)
+                        logger.info("ASR transcription successful path=%s", input_path)
                         successful += 1
                         break
 
@@ -154,7 +157,7 @@ class ASRCoordinator:
                     logger.warning("ASR attempt %s failed: %s", attempt + 1, exc)
                     if attempt == request.max_retries:
                         failed += 1
-                        logger.error("ASR transcription failed after all retries path=%s", request.input_path)
+                        logger.error("ASR transcription failed after all retries path=%s", input_path)
                         raise ExternalServiceError(f"ASR transcription failed: {exc}") from exc
 
         except ImportError as exc:

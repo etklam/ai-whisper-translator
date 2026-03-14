@@ -5,7 +5,9 @@ import re
 import urllib.request
 import urllib.error
 
+from src.application.endpoint_policy import redact_endpoint
 from src.domain.errors import ExternalServiceError
+from src.infrastructure.runtime.logging_config import redact_secret
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +17,12 @@ class LibreTranslateClient:
         self.endpoint = endpoint or os.getenv("LIBRETRANSLATE_ENDPOINT", "https://libretranslate.com/translate")
         self.api_key = api_key or os.getenv("LIBRETRANSLATE_API_KEY", "")
         self.timeout = timeout
-        logger.debug("LibreTranslateClient initialized endpoint=%s timeout=%s", self.endpoint, self.timeout)
+        logger.debug(
+            "LibreTranslateClient initialized endpoint=%s timeout=%s api_key=%s",
+            redact_endpoint(self.endpoint),
+            self.timeout,
+            redact_secret(self.api_key),
+        )
 
     def translate_text(
         self,
@@ -48,6 +55,13 @@ class LibreTranslateClient:
         )
 
         try:
+            logger.debug(
+                "Sending LibreTranslate request endpoint=%s source=%s target=%s text_len=%s",
+                redact_endpoint(self.endpoint),
+                source_code,
+                target_code,
+                len(text),
+            )
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 result = json.loads(response.read().decode("utf-8"))
                 translated = result.get("translatedText", "").strip()

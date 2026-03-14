@@ -12,6 +12,9 @@ dependencies = [
   "soundfile>=0.12.1",
 ]
 
+[project.scripts]
+ai-whisper-translator = "src.main:main"
+
 [dependency-groups]
 dev = [
   "pytest>=8.0.0",

@@ -1,0 +1,1 @@
+"""GUI localization resources."""

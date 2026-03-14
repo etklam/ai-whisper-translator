@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 import yt_dlp
 
+from src.application.path_validation import ensure_output_directory
 from src.asr.utils.helpers import sanitize_filename, check_ffmpeg_installed, print_ffmpeg_installation_help
 from src.asr.utils.logger import get_logger
 
@@ -28,8 +29,7 @@ class AudioDownloader:
             output_dir: Directory to save downloaded files
             cookies_from_browser: Browser name for yt-dlp cookies loading (e.g. "firefox")
         """
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir = ensure_output_directory(output_dir)
         self.cookies_from_browser = cookies_from_browser.strip() if cookies_from_browser else None
         self.logger = get_logger()
 

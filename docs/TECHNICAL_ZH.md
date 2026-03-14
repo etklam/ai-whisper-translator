@@ -11,7 +11,7 @@
 - `src/*.ts` 為骨架，未接入實際執行流程。
 - 套件管理：uv 優先，pip 相容。
 
-## 1.1 開發進度（截至 2026-03-14）
+## 1.1 開發進度（截至 2026-03-15）
 
 已完成並可用：
 - whisper.cpp ASR 轉錄
@@ -22,9 +22,10 @@
 - GPU 後端與 CPU fallback
 - 多格式輸出（SRT/TXT/JSON/Verbose）
 - `.config` 設定持久化
+- typed settings store 與 GUI presenter 拆分
+- local-first endpoint policy 與 filesystem validation
 
 進行中 / 下一步：
-- 移除舊版翻譯 UI 並整合流程
 - macOS/Windows 打包
 - 擴充 GUI/ASR 測試覆蓋
 
@@ -43,8 +44,8 @@
 
 高層流程：
 - GUI 收集輸入與設定
-- 翻譯（coordinator 路徑）建立 `TranslationRequest`
-- 同時保留 legacy `TranslationThread`
+- GUI presenter 建立 `TranslationRequest` 並以 async 方式執行 coordinator
+- translation / queue / clean / completion workflow 已拆成獨立 helper
 
 ## 3. 模組職責
 
@@ -52,6 +53,8 @@
 - `src/application/`
   - `models.py`：請求模型（`TranslationRequest`, `ASRRequest`）
   - `events.py`：進度事件
+  - `endpoint_policy.py`：OpenAI 相容端點正規化與信任政策
+  - `path_validation.py`：檔案/路徑驗證
   - `translation_coordinator.py`：翻譯協調 + 批次標記
   - `asr_coordinator.py`：ASR 協調
 
@@ -70,9 +73,10 @@
 
 ### GUI
 - `src/gui/app.py`：單頁 UI（左側佇列 / AI 引擎面板切換）
-
-### Legacy
-- `src/translation/translation_thread.py`
+- `src/gui/presenters/`：佇列、translation runner、completion、clean workflow、語言切換
+- `src/gui/views/`：分離的 panel 建構
+- `src/gui/config/settings_store.py`：typed settings IO
+- `src/gui/resources/i18n.py`：語系資源載入
 
 ## 4. 端到端流程
 
@@ -89,15 +93,12 @@
 - coordinator 執行批次標記翻譯
 - `ExternalServiceError` 觸發重試
 
-### Legacy Thread
-
-- `TranslationThread` 仍存在並處理部分流程
-
 ## 5. 設定與預設值
 
 ### 翻譯 / AI 引擎
 - OpenAI 相容端點預設：`http://localhost:11434/v1/chat/completions`
 - 環境變數：`OPENAI_COMPAT_ENDPOINT`、`OPENAI_API_KEY`
+- 遠端端點預設拒絕，需設定 `ALLOW_REMOTE_AI_ENDPOINTS=1`
 - LibreTranslate：`LIBRETRANSLATE_ENDPOINT`
 - 提示詞：`src/translation/prompts.json`
 - GUI 覆寫：`.config`
@@ -110,6 +111,7 @@
 
 ### 設定持久化
 - `.config` 保存 UI 與提示詞覆寫（依語言）
+- API Key 不會寫入 `.config`
 
 ## 6. 提示詞系統
 
@@ -129,7 +131,8 @@
 
 - `src/utils/file_utils.py` 計算輸出路徑
 - Replace 模式會備份到 `backup/`
-- GUI 提供覆蓋/重新命名/跳過
+- coordinator 統一處理輸出衝突；預設策略為 rename
+- 備份與寫檔前會先經過 path validation
 
 ## 9. 錯誤與重試
 

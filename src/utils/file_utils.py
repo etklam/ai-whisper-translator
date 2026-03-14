@@ -2,7 +2,14 @@ import os
 import re
 import shutil
 import logging
+from pathlib import Path
 import pysrt
+
+from src.application.path_validation import (
+    ensure_existing_file,
+    ensure_output_directory,
+    ensure_output_file_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,15 +22,13 @@ __all__ = [
 
 def ensure_backup_dir(backup_path):
     """確保備份目錄存在"""
-    if not os.path.exists(backup_path):
-        logger.debug("Creating backup directory path=%s", backup_path)
-        os.makedirs(backup_path)
-    else:
-        logger.debug("Backup directory already exists path=%s", backup_path)
+    resolved = ensure_output_directory(backup_path)
+    logger.debug("Backup directory ready path=%s", resolved)
 
 def clean_srt_file(input_file, create_backup=False):
     """清理 SRT 檔案，移除不需要的字幕，重新排序字幕編號"""
-    logger.debug("Cleaning SRT file path=%s create_backup=%s", input_file, create_backup)
+    input_path = ensure_existing_file(input_file, allowed_suffixes=(".srt",))
+    logger.debug("Cleaning SRT file path=%s create_backup=%s", input_path, create_backup)
     result = {
         "cleaned": 0,
         "total": 0
@@ -32,13 +37,13 @@ def clean_srt_file(input_file, create_backup=False):
     try:
         # 如果需要創建備份
         if create_backup:
-            backup_path = os.path.join(os.path.dirname(input_file), 'backup')
+            backup_path = os.path.join(os.path.dirname(str(input_path)), 'backup')
             ensure_backup_dir(backup_path)
-            backup_file = os.path.join(backup_path, os.path.basename(input_file))
-            shutil.copy2(input_file, backup_file)
-            logger.debug("Backup created source=%s backup=%s", input_file, backup_file)
+            backup_file = os.path.join(backup_path, os.path.basename(str(input_path)))
+            shutil.copy2(str(input_path), backup_file)
+            logger.debug("Backup created source=%s backup=%s", input_path, backup_file)
         
-        with open(input_file, 'r', encoding='utf-8') as f:
+        with open(input_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         
         new_lines = []
@@ -69,11 +74,11 @@ def clean_srt_file(input_file, create_backup=False):
                 result["cleaned"] += 1
         
         # 寫回原始檔案
-        with open(input_file, 'w', encoding='utf-8') as f:
+        with open(input_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(new_lines))
         logger.debug(
             "Cleaned SRT completed path=%s kept=%s total=%s",
-            input_file,
+            input_path,
             result["cleaned"],
             result["total"],
         )
@@ -127,7 +132,7 @@ def get_output_path(file_path, target_lang, replace_original=False):
     # 如果選擇取代原始檔案，直接返回原始檔案路徑
     if replace_original:
         logger.debug("Using original path for replace mode path=%s", file_path)
-        return file_path
+        return str(ensure_output_file_path(file_path))
 
     # 獲取原始檔案的目錄和檔名
     dir_name, file_name = os.path.split(file_path)
@@ -135,11 +140,12 @@ def get_output_path(file_path, target_lang, replace_original=False):
     
     # 在原始檔案的相同目錄下創建新檔案
     lang_suffix = get_language_suffix(target_lang)
-    output_path = os.path.join(dir_name, f"{name}{lang_suffix}{ext}")
+    output_path = Path(dir_name) / f"{name}{lang_suffix}{ext}"
+    output_path = ensure_output_file_path(output_path, allowed_parent=dir_name)
     logger.debug(
         "Computed output path source=%s target_lang=%s output=%s",
         file_path,
         target_lang,
         output_path,
     )
-    return output_path
+    return str(output_path)

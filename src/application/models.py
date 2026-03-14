@@ -13,3 +13,4 @@ class TranslationRequest:
     replace_original: bool = False
     use_alt_prompt: bool = False
     max_retries: int = 1
+    output_conflict_policy: str = "rename"

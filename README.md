@@ -25,6 +25,7 @@ This README is a first-use guide. For architecture/maintenance details, see the 
 
 ### Config & Prompts
 - GUI settings persist in `.config` (repo root)
+- Secrets are not written to `.config`; API keys stay in env vars or the current GUI session
 - Translation and summary prompts are editable in the GUI
 - Defaults live in `src/translation/prompts.json` with per-language variants
 
@@ -35,6 +36,7 @@ This README is a first-use guide. For architecture/maintenance details, see the 
 For translation/summary (optional):
 - **OpenAI-compatible endpoint** (default: Ollama at `http://localhost:11434/v1/chat/completions`)
   - Env: `OPENAI_COMPAT_ENDPOINT`, `OPENAI_API_KEY`
+  - Remote endpoints require explicit opt-in: `ALLOW_REMOTE_AI_ENDPOINTS=1`
 - **LibreTranslate** (optional): `LIBRETRANSLATE_ENDPOINT`, `LIBRETRANSLATE_API_KEY`
 
 For ASR:
@@ -61,7 +63,7 @@ pip install -r requirements.txt
 Recommended:
 
 ```bash
-uv run python main.py
+uv run ai-whisper-translator
 ```
 
 Fallback:
@@ -79,6 +81,7 @@ python main.py
 
 Notes:
 - Default endpoint is Ollama: `http://localhost:11434/v1/chat/completions`
+- Remote endpoints are rejected unless `ALLOW_REMOTE_AI_ENDPOINTS=1` is set
 - Model list is fetched from `/v1/models` of your endpoint.
 
 ## ASR + Translation + Summary (Queue Workflow)
@@ -98,6 +101,7 @@ Outputs:
 ### Ollama / OpenAI-Compatible
 - Uses `OPENAI_COMPAT_ENDPOINT` + `OPENAI_API_KEY`
 - Default is Ollama local server
+- Local endpoints are trusted by default; remote endpoints are opt-in
 
 ### LibreTranslate (Free)
 - Requires fixed source language (no auto-detect)
@@ -107,8 +111,17 @@ Outputs:
 
 ### Translation
 - Default output adds language suffix (e.g., `movie.zh_tw.srt`)
-- If target exists: `Overwrite`, `Rename`, or `Skip`
+- If target exists: coordinator auto-resolves with rename by default
 - If **Replace Original** is enabled, original is backed up to `backup/`
+
+## Dependency Updates
+
+- App startup does not install or update packages
+- Update `yt-dlp` manually when needed:
+
+```bash
+uv pip install --upgrade yt-dlp
+```
 
 ### ASR
 - Output file saved to configured directory

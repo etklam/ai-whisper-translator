@@ -25,6 +25,7 @@
 
 ### 設定與提示詞
 - GUI 設定儲存在專案根目錄 `.config`
+- API Key 不會寫入 `.config`，只保留在環境變數或目前 GUI session
 - 翻譯/摘要提示詞可在 GUI 編輯
 - 預設值位於 `src/translation/prompts.json`（含多語版本）
 
@@ -35,6 +36,7 @@
 翻譯/摘要（可選）：
 - **OpenAI 相容端點**（預設：Ollama `http://localhost:11434/v1/chat/completions`）
   - 環境變數：`OPENAI_COMPAT_ENDPOINT`、`OPENAI_API_KEY`
+  - 遠端端點需明確啟用：`ALLOW_REMOTE_AI_ENDPOINTS=1`
 - **LibreTranslate**（可選）：`LIBRETRANSLATE_ENDPOINT`、`LIBRETRANSLATE_API_KEY`
 
 ASR：
@@ -61,7 +63,7 @@ pip install -r requirements.txt
 建議：
 
 ```bash
-uv run python main.py
+uv run ai-whisper-translator
 ```
 
 備援：
@@ -79,6 +81,7 @@ python main.py
 
 注意：
 - 預設端點為 Ollama：`http://localhost:11434/v1/chat/completions`
+- 若要使用遠端端點，需先設定 `ALLOW_REMOTE_AI_ENDPOINTS=1`
 - 模型清單從端點的 `/v1/models` 取得。
 
 ## ASR + 翻譯 + 摘要（佇列流程）
@@ -98,6 +101,7 @@ python main.py
 ### Ollama / OpenAI 相容
 - 使用 `OPENAI_COMPAT_ENDPOINT` + `OPENAI_API_KEY`
 - 預設為本機 Ollama
+- 本機端點預設允許；遠端端點需明確 opt-in
 
 ### LibreTranslate（免費）
 - 必須固定原文語言（不可自動偵測）
@@ -107,8 +111,17 @@ python main.py
 
 ### 翻譯
 - 預設加上語言後綴（例如 `movie.zh_tw.srt`）
-- 既有檔案可選 `覆蓋` / `重新命名` / `跳過`
+- 既有檔案預設由 coordinator 自動重新命名處理
 - 啟用 **取代原始檔案** 時，原檔會備份到 `backup/`
+
+## 依賴更新
+
+- 啟動時不會自動安裝或更新套件
+- 需要時請手動更新 `yt-dlp`：
+
+```bash
+uv pip install --upgrade yt-dlp
+```
 
 ### ASR
 - 輸出到指定資料夾
