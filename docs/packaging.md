@@ -1,24 +1,41 @@
-# Packaging Profiles
+# Packaging Notes
 
-This project now defines packaging profile placeholders for:
+This repo includes packaging placeholders and helper scripts.
+
+## Specs
 
 - `packaging/windows/pyinstaller.spec`
 - `packaging/macos/pyinstaller.spec`
 
-Windows build helper:
+## Build whisper.cpp Shared Library
 
-- `packaging/windows/build-whisper-cpp.ps1` (builds `whisper.dll` into `whisper.cpp/build/src/`)
+### macOS
 
-macOS build helper:
+```bash
+chmod +x packaging/macos/build-whisper-cpp.sh
+./packaging/macos/build-whisper-cpp.sh --backend metal
+./packaging/macos/build-whisper-cpp.sh --backend cpu
+```
 
-- `packaging/macos/build-whisper-cpp.sh` (builds `libwhisper.dylib` into `whisper.cpp/build/src/`)
-- If first run fails with permission, make it executable:
-  - `chmod +x packaging/macos/build-whisper-cpp.sh`
+### Windows
 
-Runtime backend priority is represented in `RuntimeManifest`:
+```powershell
+./packaging/windows/build-whisper-cpp.ps1
+```
 
-- Windows: `cuda -> hip -> vulkan -> cpu`
-- macOS (Apple Silicon): `metal_coreml -> cpu`
-- Other platforms: `cpu`
+## Onboarding (macOS)
 
-These profiles establish the contract for future runtime bundle integration.
+```bash
+chmod +x packaging/macos/onboarding-whisper-cpp.sh
+./packaging/macos/onboarding-whisper-cpp.sh
+```
+
+Options:
+- `--no-model` skip model download
+- `--native true` enable native CPU optimizations
+
+## Runtime Backend Priority
+
+- Windows: `cuda → hip → vulkan → cpu`
+- macOS (Apple Silicon): `metal → cpu`
+- Other: `cpu`

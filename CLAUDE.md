@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working in this repository.
 
 ## Commands
 
@@ -15,15 +15,9 @@ uv sync
 pip install -r requirements.txt  # fallback
 ```
 
-**Run all tests:**
+**Run tests:**
 ```bash
 pytest
-```
-
-**Run a single test file or test:**
-```bash
-pytest tests/unit/application/test_translation_coordinator.py
-pytest tests/unit/application/test_translation_coordinator.py::test_name
 ```
 
 **Enable debug logging:**
@@ -42,70 +36,62 @@ APP_ENV=development python main.py
 
 ## Architecture
 
-The app is a desktop GUI (Tkinter) for two features: SRT subtitle translation via Ollama and audio transcription via whisper.cpp.
+The app is a Tkinter GUI for:
+- ASR transcription via whisper.cpp
+- Subtitle translation via OpenAI-compatible endpoints (default Ollama)
+- Optional summary generation
 
-### Layer Overview
+### Layers
 
 ```
 src/
-├── main.py               # Composition root — wires coordinators → GUI, starts mainloop
-├── gui/app.py            # Tkinter UI with two tabs: Translation and ASR
-├── application/          # Orchestration: coordinators, request dataclasses, ProgressEvent
-├── domain/               # Service Protocol interfaces + custom exceptions
-├── infrastructure/       # Concrete implementations of domain services
-├── asr/                  # whisper.cpp ctypes bindings + transcription + audio utilities
-├── translation/          # Legacy thread (being unified) + prompts.json
-└── utils/file_utils.py   # SRT cleaning, output path computation, backups
+├── main.py               # Composition root
+├── gui/app.py            # Tkinter UI
+├── application/          # Coordinators, requests, events
+├── domain/               # Protocols + errors
+├── infrastructure/       # Translation clients, prompt provider, repositories
+├── asr/                  # whisper.cpp bindings + audio utilities
+├── translation/          # Legacy TranslationThread + prompts.json
+└── utils/file_utils.py   # SRT cleanup, output paths, backups
 ```
 
 ### Data Flow: Translation
 
-1. `App` (GUI) builds a `TranslationRequest` dataclass and calls `TranslationCoordinator.run()`
-2. `TranslationCoordinator` orchestrates: load SRT (`SubtitleRepository`) → translate each subtitle (`TranslationClient` → Ollama HTTP) → save with backup
-3. Progress is emitted as `ProgressEvent` via `coordinator.event_sink → app.on_coordinator_event`
+1. GUI builds `TranslationRequest` and calls `TranslationCoordinator.run()`
+2. Coordinator orchestrates subtitle parsing → translation client → save with backup
+3. Progress events flow to GUI
 
 ### Data Flow: ASR
 
-1. `App` builds an `ASRRequest` and calls `ASRCoordinator.run()`
-2. Input audio is downloaded via yt-dlp or converted to 16kHz mono PCM float32 (soundfile/ffmpeg)
-3. `WhisperTranscriber` calls into `whisper_wrapper.py` (ctypes bindings to `libwhisper.dylib`)
-4. Progress flows back via `asr_coordinator.event_sink → app.on_asr_event`
+1. GUI builds `ASRRequest` and calls `ASRCoordinator.run()`
+2. Audio download/convert → whisper.cpp transcription
+3. Progress events flow to GUI
 
 ### Dependency Injection
 
-`src/main.py` is the composition root — it constructs all concrete implementations and injects them into coordinators. `event_sink` callbacks are assigned after `App` is constructed to avoid a circular reference.
+`src/main.py` constructs coordinators and injects dependencies into the GUI. Event sinks are set after `App` is constructed.
 
-### Service Protocols
+## Translation Clients
 
-All external service interactions are behind `typing.Protocol` interfaces in `src/domain/services/`, making them replaceable with `Mock()` in tests. The four protocols: `TranslationClient`, `SubtitleRepository`, `PromptProvider`, `ASRProvider`.
+- `OllamaTranslationClient` supports OpenAI-compatible endpoints
+  - Env: `OPENAI_COMPAT_ENDPOINT`, `OPENAI_API_KEY`
+- `LibreTranslateClient` supports free translation backend
+  - Env: `LIBRETRANSLATE_ENDPOINT`, `LIBRETRANSLATE_API_KEY`
 
-### Ollama Integration
+## Prompts
 
-- Endpoint: `http://localhost:11434/v1/chat/completions` (hardcoded in `src/main.py`)
-- `OLLAMA_NUM_PARALLEL=5` set as env var in root `main.py` before imports
-- `OllamaTranslationClient` sends system + user message, temperature 0.1, 30s timeout
-- Raises `ExternalServiceError` on failure; coordinator retries up to `max_retries`
-- Prompts loaded from `src/translation/prompts.json` (`default_prompt` / `alt_prompt` keys)
+- Stored in `src/translation/prompts.json`
+- Supports per-language keys:
+  - `default_prompt_{lang}` / `alt_prompt_{lang}`
+  - `summary_prompt_{lang}`
+- GUI overrides stored in `.config`
 
-### whisper.cpp Bindings
+## Config
 
-- `src/asr/whisper_wrapper.py` uses `ctypes` to bind the compiled shared library
-- Library path resolved at runtime via `RuntimeManifest` in `src/infrastructure/runtime/`
-- GPU backend priority: macOS = metal → cpu; Windows = cuda → hip → vulkan → cpu; Linux = cuda → vulkan → cpu
+- GUI writes `.config` at repo root
+- Stores AI engine settings, prompts, and UI state
 
-### File Output Conventions
+## Notes
 
-- **Translation**: appends language suffix by default (e.g. `movie.zh_tw.srt`); replace-mode backs up the original to `backup/`
-- **ASR**: outputs to `transcriptions/` in SRT, TXT, JSON, or Verbose format
-- Conflict resolution (Overwrite / Rename / Skip) is handled in the GUI with an auto-rename countdown
-
-### Legacy Code
-
-`src/translation/translation_thread.py` is a legacy background worker being unified into the coordinator pattern. Prefer the coordinator pattern for new work.
-
-## Testing Notes
-
-- `tests/conftest.py` provides a `fake_services` fixture with `Mock()` for all domain protocols
-- GUI tests requiring Tkinter are guarded with `pytest.mark.skipif` when `tk` is unavailable
-- Standalone scripts are protected from pytest collection via `if __name__ == "__main__"` guards
-- Sample SRT fixtures live in `tests/fixtures/`
+- Legacy `TranslationThread` still exists for some flows
+- Prefer coordinator path for new work
