@@ -5,8 +5,10 @@ __pycache__/
 *.so
 .Python
 build/
+_build/
 develop-eggs/
 dist/
+pip-wheel-metadata/
 downloads/
 eggs/
 .eggs/
@@ -19,6 +21,12 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Virtual environments
 .venv/
@@ -37,6 +45,8 @@ env/
 .DS_Store
 Thumbs.db
 .config
+.cache/
+.tmp/
 
 # ASR outputs
 transcriptions/
@@ -44,11 +54,34 @@ transcriptions/
 *.mp3
 *.m4a
 
+# Model files
+*.bin
+*.pt
+*.pth
+*.onnx
+*.gguf
+
 # whisper.cpp (too large, users can clone separately)
 # whisper.cpp/
 
+# Local config
+.env
+.env.*
+*.local
+config.local.*
+settings.local.*
+
 # Backup files
 backup/
+
+# Large datasets
+data/
+datasets/
+dataset/
+corpus/
+corpora/
+assets/
+tmp/
 
 # Test files
 test_*.py
