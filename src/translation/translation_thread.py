@@ -144,7 +144,10 @@ class TranslationThread(threading.Thread):
             return None
 
     def _get_system_prompt(self):
-        prompt = self.prompt_provider.get_prompt(use_alt_prompt=self.use_alt_prompt)
+        ui_language = None
+        if self.app and hasattr(self.app, "current_language"):
+            ui_language = self.app.current_language.get()
+        prompt = self.prompt_provider.get_prompt(use_alt_prompt=self.use_alt_prompt, language=ui_language)
         logger.debug("Resolved system prompt len=%s use_alt_prompt=%s", len(prompt), self.use_alt_prompt)
         return prompt
 

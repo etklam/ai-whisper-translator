@@ -7,6 +7,7 @@ class TranslationRequest:
     source_lang: str
     target_lang: str
     model_name: str
+    ui_language: str = "zh_tw"
     parallel_requests: int = 3
     clean_before_translate: bool = False
     replace_original: bool = False

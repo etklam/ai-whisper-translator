@@ -48,7 +48,10 @@ class TranslationCoordinator:
         )
         for index, file_path in enumerate(request.file_paths, start=1):
             logger.debug("Processing file index=%s/%s path=%s", index, total, file_path)
-            system_prompt = self.prompt_provider.get_prompt(use_alt_prompt=request.use_alt_prompt)
+            system_prompt = self.prompt_provider.get_prompt(
+                use_alt_prompt=request.use_alt_prompt,
+                language=request.ui_language,
+            )
             file_failed = False
 
             try:
