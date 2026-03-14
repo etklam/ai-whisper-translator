@@ -5,19 +5,53 @@ import sys
 import logging
 import subprocess
 import json
-from typing import Any
 import pysrt
-from queue import Queue
 import threading
 
-from src.utils.file_utils import ensure_backup_dir, clean_srt_file
+from src.application.endpoint_policy import build_models_endpoint, normalize_openai_endpoint
+from src.application.path_validation import ensure_output_directory
+from src.application.settings_models import AppSettings
+from src.gui.config.settings_store import (
+    default_settings_path,
+    load_settings,
+    save_settings,
+    snapshot_settings,
+    with_endpoint_default,
+)
+from src.gui.presenters.clean_workflow import run_clean_workflow
+from src.gui.presenters.completion_handling import (
+    resolve_file_translation_update,
+    resolve_translation_completion,
+)
+from src.gui.presenters.queue_controller import (
+    QueueController,
+    build_source_queue,
+    pop_next_queue_item,
+    queue_status_text,
+)
+from src.gui.presenters.queue_execution import (
+    resolve_asr_output_path,
+    run_asr_request,
+    run_queue_item,
+    run_summary_for_output,
+    run_translation_for_output,
+)
+from src.gui.presenters.translation_runner import (
+    build_translation_request,
+    run_translation_request,
+)
+from src.gui.presenters.ui_language import apply_ui_language, next_language
+from src.gui.resources.i18n import get_translation, load_translations
+from src.gui.views.ai_settings_panel import build_ai_settings_panel
+from src.gui.views.asr_panel import build_asr_panel
+from src.gui.views.translation_panel import build_translation_panel
+from src.utils.file_utils import clean_srt_file
 
 # 暫時禁用 tkinterdnd2（macOS 兼容性問題）
 # TODO: 修復 tkinterdnd2 後重新啟用
 TKDND_AVAILABLE = False
 print("Note: Drag-and-drop is temporarily disabled (macOS compatibility).")
 
-from src.translation.translation_thread import TranslationThread
 from src.infrastructure.translation.libretranslate_client import LibreTranslateClient
 from src.infrastructure.translation.ollama_translation_client import OllamaTranslationClient
 from src.infrastructure.prompt.json_prompt_provider import JsonPromptProvider
@@ -25,20 +59,13 @@ from src.infrastructure.prompt.json_prompt_provider import JsonPromptProvider
 logger = logging.getLogger(__name__)
 
 def _build_source_queue(urls, files):
-    queue = []
-    for url in urls:
-        queue.append({"kind": "url", "value": url})
-    for path in files:
-        queue.append({"kind": "file", "value": path})
-    return queue
+    return build_source_queue(urls, files)
 
 def _parse_urls(text):
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 def _pop_next_queue_item(queue_items):
-    if not queue_items:
-        return None
-    return queue_items.pop(0)
+    return pop_next_queue_item(queue_items)
 
 def _queue_item_label(item):
     return f"{item['kind']}: {item['value']}"
@@ -47,15 +74,13 @@ def _should_translate(flag):
     return bool(flag)
 
 def _queue_status_text(current, total, status):
-    return f"{current}/{total} - {status}"
+    return queue_status_text(current, total, status)
 
 ENGINE_KEYS = ["ollama", "libretranslate"]
-CONFIG_FILENAME = ".config"
 
 class App(tk.Tk):
     def __init__(self, coordinator=None, asr_coordinator=None):
         super().__init__()
-        self.countdown_window = None
         self.coordinator = coordinator
         self.asr_coordinator = asr_coordinator
         logger.debug("App initialized coordinator_present=%s asr_coordinator_present=%s tkdnd_available=%s",
@@ -63,437 +88,7 @@ class App(tk.Tk):
 
         # 初始化語言設定
         self.current_language = tk.StringVar(value="zh_tw")  # 預設使用繁體中文
-        self.translations = {
-            "zh_tw": {
-                "window_title": "AI 語音轉譯器",
-                "select_files": "選擇 SRT 檔案",
-                "select_folder": "文件夾批量新增",
-                "source_lang_label": "原文語言:",
-                "target_lang_label": "目標語言:",
-                "translation_engine_label": "翻譯引擎:",
-                "openai_endpoint_label": "OpenAI 端點:",
-                "openai_api_key_label": "OpenAI API Key:",
-                "translation_prompt_label": "Translation Prompt:",
-                "summary_prompt_label": "Summary Prompt:",
-                "alt_translation_prompt_label": "替代翻譯提示詞:",
-                "reset_translation_prompt": "重置翻譯提示詞",
-                "reset_summary_prompt": "重置摘要提示詞",
-                "reset_alt_translation_prompt": "重置替代提示詞",
-                "use_alt_prompt": "使用替代提示詞",
-                "ai_engine_show": "展開 AI 引擎設定",
-                "ai_engine_hide": "隱藏 AI 引擎設定",
-                "model_label": "選擇模型:",
-                "parallel_label": "並行請求數:",
-                "auto_clean": "翻譯前自動清理",
-                "debug_mode": "調試模式",
-                "clean_workspace": "翻譯後清理工作區",
-                "replace_original": "取代原始檔案",
-                "start_translation": "開始翻譯",
-                "file_removed": "已從工作區移除選中的檔案",
-                "no_files": "警告",
-                "no_files_message": "請先選擇要翻譯的 SRT 檔案",
-                "confirm": "確認",
-                "replace_warning": "您選擇了取代原始檔案模式。\n這將會直接覆蓋原始的 SRT 檔案。\n原始檔案將會備份到 backup 資料夾。\n是否確定要繼續？",
-                "cleaning": "正在清理檔案...",
-                "cleaning_progress": "正在清理檔案 {}/{} ({:.1f}%)\n已清理 {}/{} 句字幕",
-                "cleaning_complete": "清理完成！共清理 {}/{} 句字幕\n開始翻譯...",
-                "translating": "正在翻譯 {} 個檔案...",
-                "translation_progress": "正在翻譯第 {}/{} 句字幕 ({}%)",
-                "all_complete": "所有檔案翻譯完成！",
-                "workspace_cleaned": "所有檔案翻譯完成！工作區已清理。",
-                "error": "錯誤",
-                "error_message": "移除檔案時發生錯誤：{}",
-                "warning": "警告",
-                "notice": "提示",
-                "success": "成功",
-                "done": "完成",
-                "source_lang_options": ["日文", "英文", "繁體中文", "簡體中文", "韓文", "法文", "德文", "西班牙文", "義大利文", "葡萄牙文", "俄文", "阿拉伯文", "印地文", "印尼文", "越南文", "泰文", "馬來文", "自動偵測"],
-                "target_lang_options": ["繁體中文", "英文", "日文", "韓文", "法文", "德文", "西班牙文", "義大利文", "葡萄牙文", "俄文", "阿拉伯文", "印地文", "印尼文", "越南文", "泰文", "馬來文"],
-                "translation_engine_options": ["Ollama（OpenAI 相容）", "LibreTranslate（免費）"],
-                "switch_language": "切換語言",
-                "fixed_lang_required": "請選擇固定原文語言（不可使用自動偵測）",
-                "file_not_srt": "檔案 {} 不是 SRT 格式，已略過",
-                "queue_empty": "請先加入待處理項目",
-                "open_folder_failed": "無法開啟資料夾：{}",
-                "youtube_url_required": "請輸入 YouTube URL",
-                "download_failed": "下載失敗",
-                "download_failed_detail": "下載失敗：{}",
-                "select_audio_first": "請先選擇或下載音訊檔案",
-                "audio_missing": "音訊檔案不存在：{}",
-                "model_missing": "模型檔案不存在：{}",
-                "asr_complete_output": "轉錄完成！\n輸出：{}",
-                "asr_failed": "轉錄失敗",
-                "asr_failed_detail": "轉錄失敗：{}",
-                "added_srt": "已添加 {} 個 SRT 檔案",
-                "skipped_srt": "已跳過 {} 個檔案（包含已翻譯檔案或重複檔案）",
-                "skipped_backup_srt": "已跳過 {} 個備份目錄中的檔案",
-                "no_srt_found": "未找到可添加的 SRT 檔案",
-                "clean_mode_enabled": "已啟用翻譯前自動清理功能",
-                "clean_mode_disabled": "已關閉翻譯前自動清理功能",
-                "cleaning_files": "正在清理檔案...",
-                "cleaning_done": "清理完成！",
-                "queue_done": "佇列完成",
-                "status_downloading": "正在從 YouTube 下載音訊...",
-                "status_downloaded": "下載完成！",
-                "status_download_failed": "下載失敗",
-                "status_transcribing": "正在轉錄...",
-                "status_transcribed": "轉錄完成！",
-                "status_transcribe_failed": "轉錄失敗",
-                "whisper_model_section": "Whisper 模型設定",
-                "transcribe_section": "轉錄設定",
-                "browse": "瀏覽",
-                "output_folder_label": "輸出資料夾：",
-                "output_file_label": "輸出檔案：",
-                "selected_file_none": "選擇的檔案：無",
-                "clean_move_notice": "此功能已移至新工作流程，請改用批次處理。",
-                "select_srt_first": "請先選擇要清理的 SRT 檔案",
-                "clean_error": "處理檔案時發生錯誤: {}",
-                "clean_done_detail": "所有選中的 SRT 檔案已清理完成！\n原始檔案已備份至 backup 資料夾。",
-                "queue_processing": "處理中",
-                "queue_translating": "翻譯中",
-                "queue_summary": "摘要中",
-                "queue_summary_done": "摘要完成",
-                "queue_failed": "失敗",
-                "choose_output_folder": "選擇輸出資料夾",
-                "choose_model": "選擇 Whisper 模型",
-                "choose_audio": "選擇音訊檔案",
-                "choose_srt_folder": "選擇包含 SRT 檔案的文件夾",
-                "menu_file": "檔案",
-                "menu_clean_srt": "清理 SRT 檔案",
-                "menu_exit": "退出",
-                "cleaning_progress_simple": "正在清理檔案 {}/{} ({:.1f}%)",
-                "selected_file": "選擇的檔案：{}",
-                "audio_files": "音訊檔案",
-                "video_files": "影片檔案",
-                "all_files": "所有檔案",
-                "model_files": "模型檔案",
-                "file_conflict_title": "檔案已存在",
-                "file_conflict_message": "檔案 {} 已存在。\n請選擇處理方式：\n\n'覆蓋' = 覆蓋現有檔案\n'重新命名' = 自動重新命名\n'跳過' = 跳過此檔案",
-                "overwrite": "覆蓋",
-                "rename": "重新命名",
-                "skip": "跳過",
-                "auto_rename_countdown": "{} 秒後自動重新命名",
-                # ASR translatons
-                "asr_tab": "語音轉文字",
-                "translate_tab": "字幕翻譯",
-                "select_audio": "選擇音訊檔案",
-                "youtube_url": "YouTube URL:",
-                "sources_section": "來源",
-                "youtube_urls": "YouTube URLs (一行一個):",
-                "select_audio_files": "選擇音訊檔案（可多選）",
-                "queue_section": "處理佇列",
-                "add_urls_to_queue": "加入 URL 到佇列",
-                "clear_queue": "清空佇列",
-                "start_queue": "開始處理",
-                "stop_queue": "停止",
-                "asr_section": "ASR 設定",
-                "translation_section": "翻譯（可選）",
-                "enable_translation": "啟用翻譯",
-                "enable_summary": "啟用摘要",
-                "ai_engine_section": "AI 引擎設定",
-                "output_section": "輸出設定",
-                "download_from_youtube": "從 YouTube 下載",
-                "whisper_model_label": "Whisper 模型:",
-                "gpu_backend": "GPU 後端:",
-                "gpu_backend_options": ["auto", "metal", "cuda", "hip", "vulkan", "opencl", "cpu"],
-                "use_gpu": "使用 GPU 加速",
-                "asr_language_label": "轉錄語言:",
-                "asr_language_options": ["自動偵測", "英文", "繁體中文", "簡體中文", "日文", "韓文", "法文", "德文", "西班牙文"],
-                "output_format": "輸出格式:",
-                "output_format_options": ["srt", "txt", "json", "verbose"],
-                "output_to_source": "輸出到原本位置（如有）",
-                "open_output_folder": "開啟輸出資料夾",
-                "start_asr": "開始轉錄",
-                "asr_not_available": "ASR 功能不可用",
-                "asr_not_available_msg": "Whisper transcriber not available. Please install whisper.cpp library and set up the model path.",
-            },
-            "zh_cn": {
-                "window_title": "AI 语音转译器",
-                "select_files": "选择 SRT 文件",
-                "select_folder": "文件夹批量新增",
-                "source_lang_label": "原文语言:",
-                "target_lang_label": "目标语言:",
-                "translation_engine_label": "翻译引擎:",
-                "openai_endpoint_label": "OpenAI 端点:",
-                "openai_api_key_label": "OpenAI API Key:",
-                "translation_prompt_label": "Translation Prompt:",
-                "summary_prompt_label": "Summary Prompt:",
-                "alt_translation_prompt_label": "替代翻译提示词:",
-                "reset_translation_prompt": "重置翻译提示词",
-                "reset_summary_prompt": "重置摘要提示词",
-                "reset_alt_translation_prompt": "重置替代提示词",
-                "use_alt_prompt": "使用替代提示词",
-                "ai_engine_show": "展开 AI 引擎设置",
-                "ai_engine_hide": "隐藏 AI 引擎设置",
-                "model_label": "选择模型:",
-                "parallel_label": "并行请求数:",
-                "auto_clean": "翻译前自动清理",
-                "debug_mode": "调试模式",
-                "clean_workspace": "翻译后清理工作区",
-                "replace_original": "替换原始文件",
-                "start_translation": "开始翻译",
-                "file_removed": "已从工作区移除选中的文件",
-                "no_files": "警告",
-                "no_files_message": "请先选择要翻译的 SRT 文件",
-                "confirm": "确认",
-                "replace_warning": "您选择了替换原始文件模式。\n这将会直接覆盖原始的 SRT 文件。\n原始文件将会备份到 backup 文件夹。\n是否确定要继续？",
-                "cleaning": "正在清理文件...",
-                "cleaning_progress": "正在清理文件 {}/{} ({:.1f}%)\n已清理 {}/{} 句字幕",
-                "cleaning_complete": "清理完成！共清理 {}/{} 句字幕\n开始翻译...",
-                "translating": "正在翻译 {} 个文件...",
-                "translation_progress": "正在翻译第 {}/{} 句字幕 ({}%)",
-                "all_complete": "所有文件翻译完成！",
-                "workspace_cleaned": "所有文件翻译完成！工作区已清理。",
-                "error": "错误",
-                "error_message": "移除文件时发生错误：{}",
-                "warning": "警告",
-                "notice": "提示",
-                "success": "成功",
-                "done": "完成",
-                "source_lang_options": ["日文", "英文", "繁体中文", "简体中文", "韩文", "法文", "德文", "西班牙文", "意大利文", "葡萄牙文", "俄文", "阿拉伯文", "印地文", "印尼文", "越南文", "泰文", "马来文", "自动检测"],
-                "target_lang_options": ["简体中文", "英文", "日文", "韩文", "法文", "德文", "西班牙文", "意大利文", "葡萄牙文", "俄文", "阿拉伯文", "印地文", "印尼文", "越南文", "泰文", "马来文"],
-                "translation_engine_options": ["Ollama（OpenAI 相容）", "LibreTranslate（免费）"],
-                "switch_language": "切换语言",
-                "fixed_lang_required": "请选择固定原文语言（不可使用自动检测）",
-                "file_not_srt": "文件 {} 不是 SRT 格式，已跳过",
-                "queue_empty": "请先加入待处理项目",
-                "open_folder_failed": "无法打开文件夹：{}",
-                "youtube_url_required": "请输入 YouTube URL",
-                "download_failed": "下载失败",
-                "download_failed_detail": "下载失败：{}",
-                "select_audio_first": "请先选择或下载音频文件",
-                "audio_missing": "音频文件不存在：{}",
-                "model_missing": "模型文件不存在：{}",
-                "asr_complete_output": "转录完成！\n输出：{}",
-                "asr_failed": "转录失败",
-                "asr_failed_detail": "转录失败：{}",
-                "added_srt": "已添加 {} 个 SRT 文件",
-                "skipped_srt": "已跳过 {} 个文件（包含已翻译文件或重复文件）",
-                "skipped_backup_srt": "已跳过 {} 个备份目录中的文件",
-                "no_srt_found": "未找到可添加的 SRT 文件",
-                "clean_mode_enabled": "已启用翻译前自动清理功能",
-                "clean_mode_disabled": "已关闭翻译前自动清理功能",
-                "cleaning_files": "正在清理文件...",
-                "cleaning_done": "清理完成！",
-                "queue_done": "队列完成",
-                "status_downloading": "正在从 YouTube 下载音频...",
-                "status_downloaded": "下载完成！",
-                "status_download_failed": "下载失败",
-                "status_transcribing": "正在转录...",
-                "status_transcribed": "转录完成！",
-                "status_transcribe_failed": "转录失败",
-                "whisper_model_section": "Whisper 模型设置",
-                "transcribe_section": "转录设置",
-                "browse": "浏览",
-                "output_folder_label": "输出文件夹：",
-                "output_file_label": "输出文件：",
-                "selected_file_none": "选择的文件：无",
-                "clean_move_notice": "此功能已移至新工作流程，请改用批次处理。",
-                "select_srt_first": "请先选择要清理的 SRT 文件",
-                "clean_error": "处理文件时发生错误: {}",
-                "clean_done_detail": "所有选中的 SRT 文件已清理完成！\n原始文件已备份至 backup 文件夹。",
-                "queue_processing": "处理中",
-                "queue_translating": "翻译中",
-                "queue_summary": "摘要中",
-                "queue_summary_done": "摘要完成",
-                "queue_failed": "失败",
-                "choose_output_folder": "选择输出文件夹",
-                "choose_model": "选择 Whisper 模型",
-                "choose_audio": "选择音频文件",
-                "choose_srt_folder": "选择包含 SRT 文件的文件夹",
-                "menu_file": "文件",
-                "menu_clean_srt": "清理 SRT 文件",
-                "menu_exit": "退出",
-                "cleaning_progress_simple": "正在清理文件 {}/{} ({:.1f}%)",
-                "selected_file": "选择的文件：{}",
-                "audio_files": "音频文件",
-                "video_files": "视频文件",
-                "all_files": "所有文件",
-                "model_files": "模型文件",
-                "file_conflict_title": "文件已存在",
-                "file_conflict_message": "文件 {} 已存在。\n请选择处理方式：\n\n'覆盖' = 覆盖现有文件\n'重新命名' = 自动重新命名\n'跳过' = 跳过此文件",
-                "overwrite": "覆盖",
-                "rename": "重新命名",
-                "skip": "跳过",
-                "auto_rename_countdown": "{} 秒后自动重新命名",
-                # ASR translatons
-                "asr_tab": "语音转文字",
-                "translate_tab": "字幕翻译",
-                "select_audio": "选择音频文件",
-                "youtube_url": "YouTube URL:",
-                "sources_section": "来源",
-                "youtube_urls": "YouTube URLs (一行一个):",
-                "select_audio_files": "选择音频文件（可多选）",
-                "queue_section": "处理队列",
-                "add_urls_to_queue": "加入 URL 到队列",
-                "clear_queue": "清空队列",
-                "start_queue": "开始处理",
-                "stop_queue": "停止",
-                "asr_section": "ASR 设置",
-                "translation_section": "翻译（可选）",
-                "enable_translation": "启用翻译",
-                "enable_summary": "启用摘要",
-                "ai_engine_section": "AI 引擎设置",
-                "output_section": "输出设置",
-                "download_from_youtube": "从 YouTube 下载",
-                "whisper_model_label": "Whisper 模型:",
-                "gpu_backend": "GPU 后端:",
-                "gpu_backend_options": ["auto", "metal", "cuda", "hip", "vulkan", "opencl", "cpu"],
-                "use_gpu": "使用 GPU 加速",
-                "asr_language_label": "转录语言:",
-                "asr_language_options": ["自动检测", "英文", "繁体中文", "简体中文", "日文", "韩文", "法文", "德文", "西班牙文"],
-                "output_format": "输出格式:",
-                "output_format_options": ["srt", "txt", "json", "verbose"],
-                "output_to_source": "输出到原位置（如有）",
-                "open_output_folder": "打开输出文件夹",
-                "start_asr": "开始转录",
-                "asr_not_available": "ASR 功能不可用",
-                "asr_not_available_msg": "Whisper transcriber not available. Please install whisper.cpp library and set up the model path.",
-            },
-            "en": {
-                "window_title": "ai-whisper-translator",
-                "select_files": "Select SRT Files",
-                "select_folder": "Add Folder",
-                "source_lang_label": "Source Language:",
-                "target_lang_label": "Target Language:",
-                "translation_engine_label": "Translation Engine:",
-                "openai_endpoint_label": "OpenAI Endpoint:",
-                "openai_api_key_label": "OpenAI API Key:",
-                "translation_prompt_label": "Translation Prompt:",
-                "summary_prompt_label": "Summary Prompt:",
-                "alt_translation_prompt_label": "Alt Translation Prompt:",
-                "reset_translation_prompt": "Reset Translation Prompt",
-                "reset_summary_prompt": "Reset Summary Prompt",
-                "reset_alt_translation_prompt": "Reset Alt Prompt",
-                "use_alt_prompt": "Use Alt Prompt",
-                "ai_engine_show": "Show AI Engine Settings",
-                "ai_engine_hide": "Hide AI Engine Settings",
-                "model_label": "Select Model:",
-                "parallel_label": "Parallel Requests:",
-                "auto_clean": "Auto Clean Before Translation",
-                "debug_mode": "Debug Mode",
-                "clean_workspace": "Clean Workspace After Translation",
-                "replace_original": "Replace Original File",
-                "start_translation": "Start Translation",
-                "file_removed": "Selected file has been removed from workspace",
-                "no_files": "Warning",
-                "no_files_message": "Please select SRT files first",
-                "confirm": "Confirm",
-                "replace_warning": "You have chosen to replace original files.\nThis will overwrite the original SRT files.\nOriginal files will be backed up to the backup folder.\nDo you want to continue?",
-                "cleaning": "Cleaning files...",
-                "cleaning_progress": "Cleaning files {}/{} ({:.1f}%)\nCleaned {}/{} subtitles",
-                "cleaning_complete": "Cleaning complete! Cleaned {}/{} subtitles\nStarting translation...",
-                "translating": "Translating {} files...",
-                "translation_progress": "Translating subtitle {}/{} ({}%)",
-                "all_complete": "All files have been translated!",
-                "workspace_cleaned": "All files have been translated! Workspace has been cleaned.",
-                "error": "Error",
-                "error_message": "Error removing file: {}",
-                "warning": "Warning",
-                "notice": "Notice",
-                "success": "Success",
-                "done": "Done",
-                "source_lang_options": ["Japanese", "English", "Traditional Chinese", "Simplified Chinese", "Korean", "French", "German", "Spanish", "Italian", "Portuguese", "Russian", "Arabic", "Hindi", "Indonesian", "Vietnamese", "Thai", "Malay", "Auto Detect"],
-                "target_lang_options": ["Traditional Chinese", "English", "Japanese", "Korean", "French", "German", "Spanish", "Italian", "Portuguese", "Russian", "Arabic", "Hindi", "Indonesian", "Vietnamese", "Thai", "Malay"],
-                "translation_engine_options": ["Ollama (OpenAI-Compatible)", "LibreTranslate (Free)"],
-                "switch_language": "Switch Language",
-                "fixed_lang_required": "Please choose a fixed source language (auto-detect is not allowed).",
-                "file_not_srt": "File {} is not SRT and was skipped",
-                "queue_empty": "Please add items to the queue first",
-                "open_folder_failed": "Unable to open folder: {}",
-                "youtube_url_required": "Please enter a YouTube URL",
-                "download_failed": "Download failed",
-                "download_failed_detail": "Download failed: {}",
-                "select_audio_first": "Please select or download an audio file first",
-                "audio_missing": "Audio file not found: {}",
-                "model_missing": "Model file not found: {}",
-                "asr_complete_output": "Transcription complete!\nOutput: {}",
-                "asr_failed": "Transcription failed",
-                "asr_failed_detail": "Transcription failed: {}",
-                "added_srt": "Added {} SRT files",
-                "skipped_srt": "Skipped {} files (already translated or duplicates)",
-                "skipped_backup_srt": "Skipped {} files in backup folders",
-                "no_srt_found": "No SRT files found to add",
-                "clean_mode_enabled": "Auto-clean before translation enabled",
-                "clean_mode_disabled": "Auto-clean before translation disabled",
-                "cleaning_files": "Cleaning files...",
-                "cleaning_done": "Cleaning complete!",
-                "queue_done": "Queue completed",
-                "status_downloading": "Downloading audio from YouTube...",
-                "status_downloaded": "Download complete!",
-                "status_download_failed": "Download failed",
-                "status_transcribing": "Transcribing...",
-                "status_transcribed": "Transcription complete!",
-                "status_transcribe_failed": "Transcription failed",
-                "whisper_model_section": "Whisper Model Settings",
-                "transcribe_section": "Transcription Settings",
-                "browse": "Browse",
-                "output_folder_label": "Output Folder:",
-                "output_file_label": "Output File:",
-                "selected_file_none": "Selected file: none",
-                "clean_move_notice": "This feature moved to the new workflow. Please use batch processing instead.",
-                "select_srt_first": "Please select SRT files to clean first",
-                "clean_error": "Error processing file: {}",
-                "clean_done_detail": "All selected SRT files have been cleaned.\nOriginal files were backed up to the backup folder.",
-                "queue_processing": "Processing",
-                "queue_translating": "Translating",
-                "queue_summary": "Summarizing",
-                "queue_summary_done": "Summary complete",
-                "queue_failed": "Failed",
-                "choose_output_folder": "Select Output Folder",
-                "choose_model": "Select Whisper Model",
-                "choose_audio": "Select Audio File",
-                "choose_srt_folder": "Select Folder With SRT Files",
-                "menu_file": "File",
-                "menu_clean_srt": "Clean SRT Files",
-                "menu_exit": "Exit",
-                "cleaning_progress_simple": "Cleaning files {}/{} ({:.1f}%)",
-                "selected_file": "Selected file: {}",
-                "audio_files": "Audio files",
-                "video_files": "Video files",
-                "all_files": "All files",
-                "model_files": "Model files",
-                "file_conflict_title": "File Exists",
-                "file_conflict_message": "File {} already exists.\nPlease choose an action:\n\n'Overwrite' = Replace existing file\n'Rename' = Auto rename\n'Skip' = Skip this file",
-                "overwrite": "Overwrite",
-                "rename": "Rename",
-                "skip": "Skip",
-                "auto_rename_countdown": "Auto rename in {} seconds",
-                # ASR translatons
-                "asr_tab": "ASR",
-                "translate_tab": "Translate",
-                "select_audio": "Select Audio File",
-                "youtube_url": "YouTube URL:",
-                "sources_section": "Sources",
-                "youtube_urls": "YouTube URLs (one per line):",
-                "select_audio_files": "Select Audio Files (multi-select)",
-                "queue_section": "Queue",
-                "add_urls_to_queue": "Add URLs to Queue",
-                "clear_queue": "Clear Queue",
-                "start_queue": "Start Processing",
-                "stop_queue": "Stop",
-                "asr_section": "ASR Settings",
-                "translation_section": "Translation (Optional)",
-                "enable_translation": "Enable Translation",
-                "enable_summary": "Enable Summary",
-                "ai_engine_section": "AI Engine Settings",
-                "output_section": "Output",
-                "download_from_youtube": "Download from YouTube",
-                "whisper_model_label": "Whisper Model:",
-                "gpu_backend": "GPU Backend:",
-                "gpu_backend_options": ["auto", "metal", "cuda", "hip", "vulkan", "opencl", "cpu"],
-                "use_gpu": "Use GPU Acceleration",
-                "asr_language_label": "Transcribe Language:",
-                "asr_language_options": ["Auto Detect", "English", "Traditional Chinese", "Simplified Chinese", "Japanese", "Korean", "French", "German", "Spanish"],
-                "output_format": "Output Format:",
-                "output_format_options": ["srt", "txt", "json", "verbose"],
-                "output_to_source": "Output to Source Folder (if available)",
-                "open_output_folder": "Open Output Folder",
-                "start_asr": "Start Transcription",
-                "asr_not_available": "ASR Not Available",
-                "asr_not_available_msg": "Whisper transcriber not available. Please install whisper.cpp library and set up the model path.",
-            }
-        }
+        self.translations = load_translations()
 
         self.title(self.get_text("window_title"))
         self.geometry("1440x900")
@@ -521,14 +116,9 @@ class App(tk.Tk):
             os.path.join(os.path.dirname(__file__), "..", "translation", "prompts.json")
         )
         self.selected_audio_path = ""
-        self.config_path = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", CONFIG_FILENAME)
-        )
+        self.config_path = default_settings_path()
         self._config_traces_bound = False
-        self.queue_items = []
-        self.queue_items_lock = threading.Lock()
-        self.queue_total = 0
-        self.is_running = False
+        self.queue_controller = QueueController()
 
         self.create_widgets()
         self.create_clean_menu()
@@ -536,16 +126,194 @@ class App(tk.Tk):
         self._load_config()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _palette(self) -> dict[str, str]:
+        return {
+            "bg": "#F8FAFC",
+            "surface": "#FFFFFF",
+            "surface_alt": "#E2E8F0",
+            "panel": "#EFF6FF",
+            "text": "#020617",
+            "muted": "#475569",
+            "border": "#CBD5E1",
+            "accent": "#0369A1",
+            "accent_active": "#075985",
+            "success": "#0F766E",
+        }
+
+    def _setup_styles(self):
+        colors = self._palette()
+        self.configure(bg=colors["bg"])
+
+        style = ttk.Style(self)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+
+        style.configure(".", background=colors["bg"], foreground=colors["text"])
+        style.configure("App.TFrame", background=colors["bg"])
+        style.configure("TFrame", background=colors["surface"])
+        style.configure("Panel.TFrame", background=colors["surface"])
+        style.configure("Header.TFrame", background=colors["surface"])
+        style.configure("Status.TFrame", background=colors["surface"])
+        style.configure(
+            "Card.TLabelframe",
+            background=colors["surface"],
+            borderwidth=1,
+            relief="solid",
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+            padding=12,
+        )
+        style.configure(
+            "Card.TLabelframe.Label",
+            background=colors["surface"],
+            foreground=colors["text"],
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        style.configure("TLabel", background=colors["surface"], foreground=colors["text"])
+        style.configure("Muted.TLabel", background=colors["surface"], foreground=colors["muted"])
+        style.configure(
+            "HeroTitle.TLabel",
+            background=colors["surface"],
+            foreground=colors["text"],
+            font=("TkDefaultFont", 18, "bold"),
+        )
+        style.configure(
+            "HeroMeta.TLabel",
+            background=colors["surface"],
+            foreground=colors["muted"],
+            font=("TkDefaultFont", 10),
+        )
+        style.configure(
+            "SectionHint.TLabel",
+            background=colors["surface"],
+            foreground=colors["accent"],
+            font=("TkDefaultFont", 9, "bold"),
+        )
+        style.configure(
+            "Status.TLabel",
+            background=colors["surface"],
+            foreground=colors["success"],
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        style.configure("TButton", padding=(12, 8))
+        style.map("TButton", background=[("active", colors["surface_alt"])])
+        style.configure(
+            "Accent.TButton",
+            background=colors["accent"],
+            foreground="#FFFFFF",
+            borderwidth=0,
+            padding=(14, 9),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", colors["accent_active"]), ("pressed", colors["accent_active"])],
+            foreground=[("disabled", "#E2E8F0")],
+        )
+        style.configure(
+            "Subtle.TButton",
+            background=colors["panel"],
+            foreground=colors["accent"],
+            borderwidth=0,
+            padding=(12, 8),
+        )
+        style.map(
+            "Subtle.TButton",
+            background=[("active", "#DBEAFE"), ("pressed", "#DBEAFE")],
+        )
+        style.configure("TCheckbutton", background=colors["surface"], foreground=colors["text"])
+        style.configure(
+            "TEntry",
+            fieldbackground=colors["surface"],
+            foreground=colors["text"],
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+            insertcolor=colors["text"],
+            padding=6,
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=colors["surface"],
+            foreground=colors["text"],
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+            padding=6,
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", colors["surface"])],
+            selectbackground=[("readonly", colors["surface"])],
+            selectforeground=[("readonly", colors["text"])],
+        )
+        style.configure(
+            "Horizontal.TProgressbar",
+            background=colors["accent"],
+            troughcolor="#E2E8F0",
+            bordercolor="#E2E8F0",
+            lightcolor=colors["accent"],
+            darkcolor=colors["accent"],
+            thickness=10,
+        )
+
+    def _style_text_widget(self, widget: tk.Text, *, height: int | None = None):
+        colors = self._palette()
+        widget.configure(
+            bg=self._palette()["surface"],
+            fg=colors["text"],
+            insertbackground=colors["text"],
+            relief="solid",
+            borderwidth=1,
+            highlightthickness=1,
+            highlightbackground=colors["border"],
+            highlightcolor=colors["accent"],
+            padx=10,
+            pady=8,
+            font=("TkDefaultFont", 10),
+            selectbackground="#BAE6FD",
+        )
+        if height is not None:
+            widget.configure(height=height)
+
+    def _style_listbox_widget(self, widget: tk.Listbox):
+        colors = self._palette()
+        widget.configure(
+            bg=colors["surface"],
+            fg=colors["text"],
+            relief="solid",
+            borderwidth=1,
+            highlightthickness=1,
+            highlightbackground=colors["border"],
+            highlightcolor=colors["accent"],
+            selectbackground=colors["accent"],
+            selectforeground="#FFFFFF",
+            activestyle="none",
+            font=("TkDefaultFont", 10),
+        )
+
+    def _pipeline_summary_text(self) -> str:
+        return "  ->  ".join(
+            [
+                self.get_text("sources_section"),
+                self.get_text("asr_section"),
+                self.get_text("translation_section"),
+                self.get_text("output_section"),
+            ]
+        )
+
     def get_text(self, key):
         """獲取當前語言的文字"""
-        return self.translations[self.current_language.get()].get(key, key)
+        return get_translation(self.translations, self.current_language.get(), key)
 
     def _get_openai_endpoint(self) -> str:
         if hasattr(self, "openai_endpoint"):
             value = (self.openai_endpoint.get() or "").strip()
             if value:
-                return value
-        return os.getenv("OPENAI_COMPAT_ENDPOINT") or os.getenv("OLLAMA_ENDPOINT") or "http://localhost:11434/v1/chat/completions"
+                return normalize_openai_endpoint(value)
+        return normalize_openai_endpoint(
+            os.getenv("OPENAI_COMPAT_ENDPOINT") or os.getenv("OLLAMA_ENDPOINT") or None
+        )
 
     def _get_openai_api_key(self) -> str:
         if hasattr(self, "openai_api_key"):
@@ -578,6 +346,51 @@ class App(tk.Tk):
                 return base_provider.get_prompt(use_alt_prompt=False, language=lang)
 
         return _AppPromptProvider()
+
+    def _build_translation_request(self, file_paths):
+        return build_translation_request(
+            file_paths=file_paths,
+            source_lang=self.source_lang.get(),
+            target_lang=self.target_lang.get(),
+            model_name=self.model_combo.get(),
+            ui_language=self.current_language.get(),
+            parallel_requests=int(self.parallel_requests.get()),
+            clean_before_translate=False,
+            replace_original=self.replace_original_var.get(),
+            use_alt_prompt=self.use_alt_prompt_var.get(),
+            output_conflict_policy="rename",
+        )
+
+    def _file_list_paths(self) -> list[str]:
+        return [self.file_list.get(i) for i in range(self.file_list.size())]
+
+    def _start_translation_request(self, file_paths, done_callback=None):
+        if not self.coordinator:
+            raise RuntimeError("Translation coordinator is not configured")
+        try:
+            self.coordinator.translation_client = (
+                self.free_translation_client if self.translation_engine_key == "libretranslate" else self._build_ollama_client()
+            )
+        except Exception as exc:
+            logger.warning("Failed to initialize translation client error=%s", exc)
+            messagebox.showwarning(self.get_text("warning"), str(exc))
+            return False
+        self.coordinator.prompt_provider = self._build_prompt_provider()
+        request = self._build_translation_request(file_paths)
+        logger.info(
+            "Dispatching coordinator request files=%s source=%s target=%s model=%s parallel=%s clean=%s replace=%s alt_prompt=%s engine=%s",
+            len(request.file_paths),
+            request.source_lang,
+            request.target_lang,
+            request.model_name,
+            request.parallel_requests,
+            request.clean_before_translate,
+            request.replace_original,
+            request.use_alt_prompt,
+            self.translation_engine_key,
+        )
+        run_translation_request(self.coordinator, request, done_callback=done_callback)
+        return True
 
     def _default_summary_prompt(self, language: str | None = None) -> str:
         language = language or self.current_language.get()
@@ -820,12 +633,7 @@ class App(tk.Tk):
                 current,
                 self.alt_translation_prompt_text.get("1.0", tk.END),
             )
-        if current == "zh_tw":
-            new_language = "zh_cn"
-        elif current == "zh_cn":
-            new_language = "en"
-        else:
-            new_language = "zh_tw"
+        new_language = next_language(current)
         self.current_language.set(new_language)
         logger.debug("UI language switched from=%s to=%s", current, new_language)
         self.update_ui_language()
@@ -833,132 +641,7 @@ class App(tk.Tk):
 
     def update_ui_language(self):
         """更新UI語言"""
-        # 更新視窗標題
-        self.title(self.get_text("window_title"))
-        
-        # 更新語言切換按鈕
-        self.lang_button.config(text=self.get_text("switch_language"))
-        if hasattr(self, "youtube_urls_label"):
-            self.youtube_urls_label.config(text=self.get_text("youtube_urls"))
-        if hasattr(self, "add_urls_button"):
-            self.add_urls_button.config(text=self.get_text("add_urls_to_queue"))
-        if hasattr(self, "select_audio_button"):
-            self.select_audio_button.config(text=self.get_text("select_audio_files"))
-        if hasattr(self, "clear_queue_button"):
-            self.clear_queue_button.config(text=self.get_text("clear_queue"))
-        if hasattr(self, "start_queue_button"):
-            self.start_queue_button.config(text=self.get_text("start_queue"))
-        if hasattr(self, "stop_queue_button"):
-            self.stop_queue_button.config(text=self.get_text("stop_queue"))
-        if hasattr(self, "enable_translation_check"):
-            self.enable_translation_check.config(text=self.get_text("enable_translation"))
-        if hasattr(self, "enable_summary_check"):
-            self.enable_summary_check.config(text=self.get_text("enable_summary"))
-        if hasattr(self, "sources_frame"):
-            self.sources_frame.config(text=self.get_text("sources_section"))
-        if hasattr(self, "queue_frame"):
-            self.queue_frame.config(text=self.get_text("queue_section"))
-        if hasattr(self, "asr_frame"):
-            self.asr_frame.config(text=self.get_text("asr_section"))
-        if hasattr(self, "translation_frame"):
-            self.translation_frame.config(text=self.get_text("translation_section"))
-        if hasattr(self, "output_frame"):
-            self.output_frame.config(text=self.get_text("output_section"))
-        if hasattr(self, "asr_model_frame"):
-            self.asr_model_frame.config(text=self.get_text("whisper_model_section"))
-        if hasattr(self, "transcribe_frame"):
-            self.transcribe_frame.config(text=self.get_text("transcribe_section"))
-
-        if hasattr(self, "target_lang_label"):
-            self.target_lang_label.config(text=self.get_text("target_lang_label"))
-        if hasattr(self, "source_lang_label"):
-            self.source_lang_label.config(text=self.get_text("source_lang_label"))
-        if hasattr(self, "translation_engine_label"):
-            self.translation_engine_label.config(text=self.get_text("translation_engine_label"))
-        if hasattr(self, "openai_endpoint_label"):
-            self.openai_endpoint_label.config(text=self.get_text("openai_endpoint_label"))
-        if hasattr(self, "openai_api_key_label"):
-            self.openai_api_key_label.config(text=self.get_text("openai_api_key_label"))
-        if hasattr(self, "summary_prompt_label"):
-            self.summary_prompt_label.config(text=self.get_text("summary_prompt_label"))
-        if hasattr(self, "translation_prompt_label"):
-            self.translation_prompt_label.config(text=self.get_text("translation_prompt_label"))
-        if hasattr(self, "alt_translation_prompt_label"):
-            self.alt_translation_prompt_label.config(text=self.get_text("alt_translation_prompt_label"))
-        if hasattr(self, "reset_translation_prompt_button"):
-            self.reset_translation_prompt_button.config(text=self.get_text("reset_translation_prompt"))
-        if hasattr(self, "reset_summary_prompt_button"):
-            self.reset_summary_prompt_button.config(text=self.get_text("reset_summary_prompt"))
-        if hasattr(self, "reset_alt_translation_prompt_button"):
-            self.reset_alt_translation_prompt_button.config(text=self.get_text("reset_alt_translation_prompt"))
-        if hasattr(self, "use_alt_prompt_check"):
-            self.use_alt_prompt_check.config(text=self.get_text("use_alt_prompt"))
-        if hasattr(self, "ai_engine_frame"):
-            self.ai_engine_frame.config(text=self.get_text("ai_engine_section"))
-        if hasattr(self, "ai_engine_toggle_button"):
-            self.ai_engine_toggle_button.config(text=self._get_ai_engine_toggle_text())
-        if hasattr(self, "menubar") and hasattr(self, "file_menu"):
-            try:
-                self.menubar.entryconfig(0, label=self.get_text("menu_file"))
-                self.file_menu.entryconfig(0, label=self.get_text("menu_clean_srt"))
-                self.file_menu.entryconfig(2, label=self.get_text("menu_exit"))
-            except tk.TclError:
-                pass
-        if hasattr(self, "model_label"):
-            self.model_label.config(text=self.get_text("model_label"))
-        if hasattr(self, "parallel_label"):
-            self.parallel_label.config(text=self.get_text("parallel_label"))
-
-        if hasattr(self, "use_gpu_check"):
-            self.use_gpu_check.config(text=self.get_text("use_gpu"))
-        if hasattr(self, "gpu_backend_label"):
-            self.gpu_backend_label.config(text=self.get_text("gpu_backend"))
-        if hasattr(self, "asr_model_label"):
-            self.asr_model_label.config(text=self.get_text("whisper_model_label"))
-        if hasattr(self, "browse_model_button"):
-            self.browse_model_button.config(text=self.get_text("browse"))
-        if hasattr(self, "asr_lang_label"):
-            self.asr_lang_label.config(text=self.get_text("asr_language_label"))
-        if hasattr(self, "output_format_label"):
-            self.output_format_label.config(text=self.get_text("output_format"))
-        if hasattr(self, "asr_output_path_label"):
-            self.asr_output_path_label.config(text=self.get_text("output_folder_label"))
-        if hasattr(self, "browse_output_button"):
-            self.browse_output_button.config(text=self.get_text("browse"))
-        if hasattr(self, "open_output_button"):
-            self.open_output_button.config(text=self.get_text("open_output_folder"))
-        if hasattr(self, "output_to_source_check"):
-            self.output_to_source_check.config(text=self.get_text("output_to_source"))
-        if hasattr(self, "audio_path_label"):
-            if self.selected_audio_path:
-                self.audio_path_label.config(
-                    text=self.get_text("selected_file").format(self.selected_audio_path)
-                )
-            else:
-                self.audio_path_label.config(text=self.get_text("selected_file_none"))
-
-        if hasattr(self, "asr_lang"):
-            self.asr_lang['values'] = self.translations[self.current_language.get()]["asr_language_options"]
-            if self.asr_lang.get() not in self.asr_lang['values']:
-                self.asr_lang.set(self.asr_lang['values'][0])
-        if hasattr(self, "source_lang"):
-            source_values = self.translations[self.current_language.get()]["source_lang_options"]
-            if self.translation_engine_key == "libretranslate":
-                source_values = [v for v in source_values if not self._is_auto_lang(v)]
-            self.source_lang["values"] = source_values
-            if self.source_lang.get() not in source_values:
-                self.source_lang.set(source_values[0] if source_values else "")
-        if hasattr(self, "translation_engine"):
-            self.translation_engine["values"] = self._get_engine_labels()
-            self.translation_engine_var.set(self._label_for_engine(self.translation_engine_key))
-        if hasattr(self, "target_lang"):
-            self.target_lang['values'] = self.translations[self.current_language.get()]["target_lang_options"]
-            if self.target_lang.get() not in self.target_lang['values']:
-                self.target_lang.set(self.target_lang['values'][0])
-        self._refresh_summary_prompt_text()
-        self._refresh_translation_prompt_text()
-        self._refresh_alt_translation_prompt_text()
-        self._save_config()
+        apply_ui_language(self)
 
     def on_translation_engine_changed(self, event=None):
         label = (self.translation_engine_var.get() or "").strip()
@@ -998,94 +681,133 @@ class App(tk.Tk):
         return True
 
     def create_widgets(self):
-        content_frame = ttk.Frame(self)
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        self._setup_styles()
+
+        shell = ttk.Frame(self, style="App.TFrame")
+        shell.pack(fill=tk.BOTH, expand=True, padx=18, pady=18)
+
+        header_frame = ttk.Frame(shell, style="Header.TFrame")
+        header_frame.pack(fill=tk.X, pady=(0, 14))
+
+        self.hero_title_label = ttk.Label(
+            header_frame,
+            text=self.get_text("window_title"),
+            style="HeroTitle.TLabel",
+        )
+        self.hero_title_label.pack(anchor="w", padx=18, pady=(16, 2))
+
+        self.hero_meta_label = ttk.Label(
+            header_frame,
+            text=self._pipeline_summary_text(),
+            style="HeroMeta.TLabel",
+        )
+        self.hero_meta_label.pack(anchor="w", padx=18, pady=(0, 16))
+
+        content_frame = ttk.Frame(shell, style="App.TFrame")
+        content_frame.pack(fill=tk.BOTH, expand=True)
         content_frame.columnconfigure(0, weight=1, uniform="columns")
         content_frame.columnconfigure(1, weight=1, uniform="columns")
         content_frame.rowconfigure(0, weight=1)
         self._create_single_page(content_frame)
 
-        # 進度條框架（標籤頁外）
-        progress_frame = ttk.Frame(self)
-        progress_frame.pack(fill=tk.X, padx=20, pady=10)
+        status_frame = ttk.Frame(shell, style="Status.TFrame")
+        status_frame.pack(fill=tk.X, pady=(14, 0))
 
-        # 進度條
-        self.progress_bar = ttk.Progressbar(progress_frame, length=400, mode='determinate')
-        self.progress_bar.pack(fill=tk.X)
+        self.status_heading_label = ttk.Label(
+            status_frame,
+            text=self.get_text("workflow_status"),
+            style="SectionHint.TLabel",
+        )
+        self.status_heading_label.pack(anchor="w", padx=18, pady=(16, 4))
 
-        # 狀態標籤框架
-        status_frame = ttk.Frame(self)
-        status_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        self.progress_bar = ttk.Progressbar(status_frame, mode="determinate")
+        self.progress_bar.pack(fill=tk.X, padx=18, pady=(0, 12))
 
-        # 狀態標籤
-        self.status_label = ttk.Label(status_frame, text="", wraplength=900, justify="center")
-        self.status_label.pack(fill=tk.BOTH, expand=True)
+        self.status_label = ttk.Label(
+            status_frame,
+            text="",
+            style="Status.TLabel",
+            wraplength=1100,
+            justify="left",
+        )
+        self.status_label.pack(fill=tk.X, padx=18, pady=(0, 18))
 
     def _create_single_page(self, parent):
-        left_frame = ttk.Frame(parent)
-        left_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        left_frame = ttk.Frame(parent, style="App.TFrame")
+        left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=0)
         left_frame.columnconfigure(0, weight=1)
         left_frame.rowconfigure(1, weight=1)
 
-        right_frame = ttk.Frame(parent)
-        right_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        right_frame = ttk.Frame(parent, style="App.TFrame")
+        right_frame.grid(row=0, column=1, sticky="nsew", padx=(10, 0), pady=0)
         right_frame.columnconfigure(0, weight=1)
 
-        self.sources_frame = ttk.LabelFrame(left_frame, text=self.get_text("sources_section"))
-        self.sources_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.sources_frame = ttk.LabelFrame(left_frame, text=self.get_text("sources_section"), style="Card.TLabelframe")
+        self.sources_frame.pack(fill=tk.X, pady=(0, 14))
 
         url_frame = ttk.Frame(self.sources_frame)
-        url_frame.pack(fill=tk.X, padx=10, pady=5)
+        url_frame.pack(fill=tk.X, padx=6, pady=4)
 
         self.youtube_urls_label = ttk.Label(url_frame, text=self.get_text("youtube_urls"))
         self.youtube_urls_label.pack(anchor="w")
 
         self.url_text = tk.Text(url_frame, height=4)
-        self.url_text.pack(fill=tk.X, pady=2)
+        self.url_text.pack(fill=tk.X, pady=(6, 0))
+        self._style_text_widget(self.url_text, height=5)
 
         source_buttons = ttk.Frame(self.sources_frame)
-        source_buttons.pack(fill=tk.X, padx=10, pady=5)
+        source_buttons.pack(fill=tk.X, padx=6, pady=(10, 2))
 
         self.add_urls_button = ttk.Button(
             source_buttons,
             text=self.get_text("add_urls_to_queue"),
             command=self.add_urls_to_queue,
+            style="Subtle.TButton",
         )
-        self.add_urls_button.pack(side=tk.LEFT, padx=5)
+        self.add_urls_button.pack(side=tk.LEFT, padx=(0, 8))
 
         self.select_audio_button = ttk.Button(
             source_buttons,
             text=self.get_text("select_audio_files"),
             command=self.select_audio_files,
         )
-        self.select_audio_button.pack(side=tk.LEFT, padx=5)
+        self.select_audio_button.pack(side=tk.LEFT)
 
-        self.queue_frame = ttk.LabelFrame(left_frame, text=self.get_text("queue_section"))
-        self.queue_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        self.queue_frame = ttk.LabelFrame(left_frame, text=self.get_text("queue_section"), style="Card.TLabelframe")
+        self.queue_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.queue_list = tk.Listbox(self.queue_frame, width=70, height=6, selectmode=tk.SINGLE)
-        self.queue_list.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        queue_list_frame = ttk.Frame(self.queue_frame)
+        queue_list_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(4, 0))
+
+        self.queue_list = tk.Listbox(queue_list_frame, width=70, height=6, selectmode=tk.SINGLE)
+        self.queue_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._style_listbox_widget(self.queue_list)
+
+        queue_scrollbar = ttk.Scrollbar(queue_list_frame, orient="vertical", command=self.queue_list.yview)
+        queue_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
+        self.queue_list.configure(yscrollcommand=queue_scrollbar.set)
 
         queue_buttons = ttk.Frame(self.queue_frame)
-        queue_buttons.pack(fill=tk.X, padx=10, pady=5)
+        queue_buttons.pack(fill=tk.X, padx=6, pady=(10, 2))
 
         self.clear_queue_button = ttk.Button(
             queue_buttons,
             text=self.get_text("clear_queue"),
             command=self.clear_queue,
+            style="Subtle.TButton",
         )
-        self.clear_queue_button.pack(side=tk.LEFT, padx=5)
+        self.clear_queue_button.pack(side=tk.LEFT)
 
-        self.ai_engine_frame = ttk.LabelFrame(left_frame, text=self.get_text("ai_engine_section"))
+        self.ai_engine_frame = ttk.LabelFrame(left_frame, text=self.get_text("ai_engine_section"), style="Card.TLabelframe")
         self._create_ai_engine_settings(self.ai_engine_frame)
 
-        self.asr_frame = ttk.LabelFrame(right_frame, text=self.get_text("asr_section"))
-        self.asr_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.asr_frame = ttk.LabelFrame(right_frame, text=self.get_text("asr_section"), style="Card.TLabelframe")
+        self.asr_frame.pack(fill=tk.X, pady=(0, 14))
 
         self._create_asr_settings(self.asr_frame)
 
-        self.translation_frame = ttk.LabelFrame(right_frame, text=self.get_text("translation_section"))
-        self.translation_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.translation_frame = ttk.LabelFrame(right_frame, text=self.get_text("translation_section"), style="Card.TLabelframe")
+        self.translation_frame.pack(fill=tk.X, pady=(0, 14))
 
         self.enable_translation_var = tk.BooleanVar(value=False)
         self.enable_translation_check = ttk.Checkbutton(
@@ -1094,7 +816,7 @@ class App(tk.Tk):
             variable=self.enable_translation_var,
             command=self.toggle_translation_options,
         )
-        self.enable_translation_check.pack(anchor="w", padx=10, pady=5)
+        self.enable_translation_check.pack(anchor="w", padx=6, pady=(4, 2))
 
         self.enable_summary_check = ttk.Checkbutton(
             self.translation_frame,
@@ -1102,289 +824,54 @@ class App(tk.Tk):
             variable=self.enable_summary_var,
             command=self.toggle_translation_options,
         )
-        self.enable_summary_check.pack(anchor="w", padx=10, pady=5)
+        self.enable_summary_check.pack(anchor="w", padx=6, pady=(2, 4))
 
         self.translation_options_frame = ttk.Frame(self.translation_frame)
-        self.translation_options_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.translation_options_frame.pack(fill=tk.X, padx=6, pady=(8, 2))
         self._create_translation_settings(self.translation_options_frame)
 
-        self.output_frame = ttk.LabelFrame(right_frame, text=self.get_text("output_section"))
-        self.output_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.output_frame = ttk.LabelFrame(right_frame, text=self.get_text("output_section"), style="Card.TLabelframe")
+        self.output_frame.pack(fill=tk.X, pady=(0, 14))
 
         self._create_output_settings(self.output_frame)
 
         control_frame = ttk.Frame(right_frame)
-        control_frame.pack(fill=tk.X, padx=10, pady=5)
+        control_frame.pack(fill=tk.X, pady=(0, 4))
 
         self.start_queue_button = ttk.Button(
             control_frame,
             text=self.get_text("start_queue"),
             command=self.start_queue,
+            style="Accent.TButton",
         )
-        self.start_queue_button.pack(side=tk.LEFT, padx=5)
+        self.start_queue_button.pack(side=tk.LEFT, padx=(0, 8))
 
         self.stop_queue_button = ttk.Button(
             control_frame,
             text=self.get_text("stop_queue"),
             command=self.stop_queue,
+            style="Subtle.TButton",
         )
-        self.stop_queue_button.pack(side=tk.LEFT, padx=5)
+        self.stop_queue_button.pack(side=tk.LEFT)
 
         self.lang_button = ttk.Button(
             control_frame,
             text=self.get_text("switch_language"),
-            command=self.switch_language
+            command=self.switch_language,
         )
-        self.lang_button.pack(side=tk.RIGHT, padx=5)
+        self.lang_button.pack(side=tk.RIGHT)
 
         self.toggle_translation_options()
         self.toggle_translation_engine_options()
 
     def _create_asr_settings(self, parent):
-        self.asr_model_frame = ttk.LabelFrame(parent, text=self.get_text("whisper_model_section"))
-        self.asr_model_frame.pack(pady=5, padx=10, fill=tk.X)
-
-        model_path_frame = ttk.Frame(self.asr_model_frame)
-        model_path_frame.pack(fill=tk.X, padx=5, pady=5)
-
-        self.asr_model_label = ttk.Label(model_path_frame, text=self.get_text("whisper_model_label"))
-        self.asr_model_label.pack(side=tk.LEFT, padx=5)
-
-        self.asr_model_path = ttk.Entry(model_path_frame)
-        self.asr_model_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.asr_model_path.insert(0, "whisper.cpp/models/ggml-base.bin")
-        self.asr_model_path.bind("<FocusOut>", lambda _e: self._save_config())
-
-        self.browse_model_button = ttk.Button(
-            model_path_frame,
-            text=self.get_text("browse"),
-            command=self.browse_model
-        )
-        self.browse_model_button.pack(side=tk.LEFT, padx=5)
-
-        gpu_frame = ttk.Frame(self.asr_model_frame)
-        gpu_frame.pack(fill=tk.X, padx=5, pady=5)
-
-        self.use_gpu_var = tk.BooleanVar(value=True)
-        self.use_gpu_check = ttk.Checkbutton(
-            gpu_frame,
-            text=self.get_text("use_gpu"),
-            variable=self.use_gpu_var
-        )
-        self.use_gpu_check.pack(side=tk.LEFT, padx=5)
-
-        self.gpu_backend_label = ttk.Label(gpu_frame, text=self.get_text("gpu_backend"))
-        self.gpu_backend_label.pack(side=tk.LEFT, padx=5)
-
-        self.gpu_backend = ttk.Combobox(
-            gpu_frame,
-            values=self.translations[self.current_language.get()]["gpu_backend_options"]
-        )
-        self.gpu_backend.set("auto")
-        self.gpu_backend.pack(side=tk.LEFT, padx=5)
-        self.gpu_backend.bind("<<ComboboxSelected>>", lambda _e: self._save_config())
-
-        self.transcribe_frame = ttk.LabelFrame(parent, text=self.get_text("transcribe_section"))
-        self.transcribe_frame.pack(pady=5, padx=10, fill=tk.X)
-
-        lang_select_frame = ttk.Frame(self.transcribe_frame)
-        lang_select_frame.pack(fill=tk.X, padx=5, pady=5)
-
-        self.asr_lang_label = ttk.Label(lang_select_frame, text=self.get_text("asr_language_label"))
-        self.asr_lang_label.pack(side=tk.LEFT, padx=5)
-
-        self.asr_lang = ttk.Combobox(
-            lang_select_frame,
-            values=self.translations[self.current_language.get()]["asr_language_options"]
-        )
-        self.asr_lang.set(self.translations[self.current_language.get()]["asr_language_options"][0])
-        self.asr_lang.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.asr_lang.bind("<<ComboboxSelected>>", lambda _e: self._save_config())
-
-        output_format_frame = ttk.Frame(self.transcribe_frame)
-        output_format_frame.pack(fill=tk.X, padx=5, pady=5)
-
-        self.output_format_label = ttk.Label(output_format_frame, text=self.get_text("output_format"))
-        self.output_format_label.pack(side=tk.LEFT, padx=5)
-
-        self.output_format = ttk.Combobox(
-            output_format_frame,
-            values=self.translations[self.current_language.get()]["output_format_options"]
-        )
-        self.output_format.set("srt")
-        self.output_format.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.output_format.bind("<<ComboboxSelected>>", lambda _e: self._save_config())
+        build_asr_panel(self, parent)
 
     def _create_translation_settings(self, parent):
-        self.translation_specific_frame = ttk.Frame(parent)
-        self.translation_specific_frame.pack(pady=5, fill=tk.X)
-
-        lang_frame = ttk.Frame(self.translation_specific_frame)
-        lang_frame.pack(pady=5, fill=tk.X)
-
-        self.source_lang_label = ttk.Label(lang_frame, text=self.get_text("source_lang_label"))
-        self.source_lang_label.grid(row=0, column=0, padx=5)
-        self.source_lang = ttk.Combobox(
-            lang_frame,
-            values=self.translations[self.current_language.get()]["source_lang_options"]
-        )
-        self.source_lang.set(self._default_source_lang())
-        self.source_lang.grid(row=0, column=1, padx=5)
-        self.source_lang.bind("<<ComboboxSelected>>", lambda _e: self._save_config())
-
-        self.target_lang_label = ttk.Label(lang_frame, text=self.get_text("target_lang_label"))
-        self.target_lang_label.grid(row=0, column=2, padx=5)
-        self.target_lang = ttk.Combobox(
-            lang_frame,
-            values=self.translations[self.current_language.get()]["target_lang_options"]
-        )
-        self.target_lang.set(self.translations[self.current_language.get()]["target_lang_options"][0])
-        self.target_lang.grid(row=0, column=3, padx=5)
-        self.target_lang.bind("<<ComboboxSelected>>", lambda _e: self._save_config())
-
-        engine_frame = ttk.Frame(self.translation_specific_frame)
-        engine_frame.pack(pady=5, fill=tk.X)
-
-        self.translation_engine_label = ttk.Label(engine_frame, text=self.get_text("translation_engine_label"))
-        self.translation_engine_label.grid(row=0, column=0, padx=5)
-        self.translation_engine = ttk.Combobox(
-            engine_frame,
-            textvariable=self.translation_engine_var,
-            values=self._get_engine_labels(),
-            state="readonly",
-        )
-        self.translation_engine_var.set(self._label_for_engine(self.translation_engine_key))
-        self.translation_engine.grid(row=0, column=1, padx=5)
-        self.translation_engine.bind("<<ComboboxSelected>>", self.on_translation_engine_changed)
-
-        checkbox_frame = ttk.Frame(self.translation_specific_frame)
-        checkbox_frame.pack(pady=5, fill=tk.X)
-
-        self.replace_original_check = ttk.Checkbutton(
-            checkbox_frame,
-            text=self.get_text("replace_original"),
-            variable=self.replace_original_var
-        )
-        self.replace_original_check.pack(side=tk.LEFT, padx=5)
-
-        self.use_alt_prompt_check = ttk.Checkbutton(
-            checkbox_frame,
-            text=self.get_text("use_alt_prompt"),
-            variable=self.use_alt_prompt_var
-        )
-        self.use_alt_prompt_check.pack(side=tk.LEFT, padx=5)
-
-        self.ai_engine_toggle_frame = ttk.Frame(parent)
-        self.ai_engine_toggle_frame.pack(pady=5, fill=tk.X)
-        self.ai_engine_toggle_button = ttk.Button(
-            self.ai_engine_toggle_frame,
-            text=self._get_ai_engine_toggle_text(),
-            command=self.toggle_ai_engine_visibility,
-        )
-        self.ai_engine_toggle_button.pack(anchor="w", padx=5)
-        self._apply_ai_engine_visibility()
+        build_translation_panel(self, parent)
 
     def _create_ai_engine_settings(self, parent):
-        engine_frame = ttk.Frame(parent)
-        engine_frame.pack(pady=5, fill=tk.X)
-
-        self.openai_endpoint_label = ttk.Label(engine_frame, text=self.get_text("openai_endpoint_label"))
-        self.openai_endpoint_label.grid(row=0, column=0, padx=5)
-        self.openai_endpoint = ttk.Entry(engine_frame, width=36)
-        self.openai_endpoint.grid(row=0, column=1, padx=5, sticky="ew")
-        self.openai_endpoint.insert(0, self._get_openai_endpoint())
-        self.openai_endpoint.bind("<FocusOut>", lambda _e: self._save_config())
-        engine_frame.columnconfigure(1, weight=1)
-
-        self.openai_api_key_label = ttk.Label(engine_frame, text=self.get_text("openai_api_key_label"))
-        self.openai_api_key_label.grid(row=1, column=0, padx=5, pady=(4, 0))
-        self.openai_api_key = ttk.Entry(engine_frame, width=36, show="*")
-        self.openai_api_key.grid(row=1, column=1, padx=5, pady=(4, 0), sticky="ew")
-        self.openai_api_key.insert(0, self._get_openai_api_key())
-        self.openai_api_key.bind("<FocusOut>", lambda _e: self._save_config())
-
-        model_frame = ttk.Frame(parent)
-        model_frame.pack(pady=5, fill=tk.X)
-
-        self.model_label = ttk.Label(model_frame, text=self.get_text("model_label"))
-        self.model_label.grid(row=0, column=0, padx=5)
-        self.model_combo = ttk.Combobox(model_frame, values=self.get_model_list())
-        self.model_combo.set("gpt-oss:20b")
-        self.model_combo.grid(row=0, column=1, padx=5)
-        self.model_combo.bind("<<ComboboxSelected>>", lambda _e: self._save_config())
-
-        self.parallel_label = ttk.Label(model_frame, text=self.get_text("parallel_label"))
-        self.parallel_label.grid(row=0, column=2, padx=5)
-        self.parallel_requests = ttk.Combobox(
-            model_frame,
-            values=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "15", "20"]
-        )
-        self.parallel_requests.set("10")
-        self.parallel_requests.grid(row=0, column=3, padx=5)
-        self.parallel_requests.bind("<<ComboboxSelected>>", lambda _e: self._save_config())
-
-        translation_prompt_frame = ttk.Frame(parent)
-        translation_prompt_frame.pack(pady=5, fill=tk.BOTH)
-
-        translation_header_frame = ttk.Frame(translation_prompt_frame)
-        translation_header_frame.pack(fill=tk.X, padx=5)
-        self.translation_prompt_label = ttk.Label(translation_header_frame, text=self.get_text("translation_prompt_label"))
-        self.translation_prompt_label.pack(side=tk.LEFT)
-        self.reset_translation_prompt_button = ttk.Button(
-            translation_header_frame,
-            text=self.get_text("reset_translation_prompt"),
-            command=self._reset_translation_prompt,
-        )
-        self.reset_translation_prompt_button.pack(side=tk.RIGHT)
-
-        self.translation_prompt_text = tk.Text(translation_prompt_frame, height=4, wrap="word")
-        self.translation_prompt_text.pack(fill=tk.X, padx=5)
-        self.translation_prompt_text.insert("1.0", self._get_translation_prompt_for_language(self.current_language.get()))
-        self.translation_prompt_text.bind("<FocusOut>", lambda _e: self._save_config())
-
-        alt_translation_prompt_frame = ttk.Frame(parent)
-        alt_translation_prompt_frame.pack(pady=5, fill=tk.BOTH)
-
-        alt_translation_header_frame = ttk.Frame(alt_translation_prompt_frame)
-        alt_translation_header_frame.pack(fill=tk.X, padx=5)
-        self.alt_translation_prompt_label = ttk.Label(
-            alt_translation_header_frame,
-            text=self.get_text("alt_translation_prompt_label"),
-        )
-        self.alt_translation_prompt_label.pack(side=tk.LEFT)
-        self.reset_alt_translation_prompt_button = ttk.Button(
-            alt_translation_header_frame,
-            text=self.get_text("reset_alt_translation_prompt"),
-            command=self._reset_alt_translation_prompt,
-        )
-        self.reset_alt_translation_prompt_button.pack(side=tk.RIGHT)
-
-        self.alt_translation_prompt_text = tk.Text(alt_translation_prompt_frame, height=3, wrap="word")
-        self.alt_translation_prompt_text.pack(fill=tk.X, padx=5)
-        self.alt_translation_prompt_text.insert(
-            "1.0",
-            self._get_alt_translation_prompt_for_language(self.current_language.get()),
-        )
-        self.alt_translation_prompt_text.bind("<FocusOut>", lambda _e: self._save_config())
-
-        summary_prompt_frame = ttk.Frame(parent)
-        summary_prompt_frame.pack(pady=5, fill=tk.BOTH)
-
-        summary_header_frame = ttk.Frame(summary_prompt_frame)
-        summary_header_frame.pack(fill=tk.X, padx=5)
-        self.summary_prompt_label = ttk.Label(summary_header_frame, text=self.get_text("summary_prompt_label"))
-        self.summary_prompt_label.pack(side=tk.LEFT)
-        self.reset_summary_prompt_button = ttk.Button(
-            summary_header_frame,
-            text=self.get_text("reset_summary_prompt"),
-            command=self._reset_summary_prompt,
-        )
-        self.reset_summary_prompt_button.pack(side=tk.RIGHT)
-
-        self.summary_prompt_text = tk.Text(summary_prompt_frame, height=3, wrap="word")
-        self.summary_prompt_text.pack(fill=tk.X, padx=5)
-        self.summary_prompt_text.insert("1.0", self._get_summary_prompt())
-        self.summary_prompt_text.bind("<FocusOut>", lambda _e: self._save_config())
+        build_ai_settings_panel(self, parent)
 
     def _create_output_settings(self, parent):
         output_path_frame = ttk.Frame(parent)
@@ -1447,10 +934,10 @@ class App(tk.Tk):
             return
         if self.ai_engine_collapsed_var.get():
             if hasattr(self, "sources_frame") and self.sources_frame.winfo_manager() == "":
-                self.sources_frame.pack(fill=tk.X, padx=10, pady=5)
+                self.sources_frame.pack(fill=tk.X, pady=(0, 14))
                 self.sources_frame.config(text=self.get_text("sources_section"))
             if hasattr(self, "queue_frame") and self.queue_frame.winfo_manager() == "":
-                self.queue_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+                self.queue_frame.pack(fill=tk.BOTH, expand=True)
                 self.queue_frame.config(text=self.get_text("queue_section"))
             if self.ai_engine_frame.winfo_manager():
                 self.ai_engine_frame.pack_forget()
@@ -1460,7 +947,7 @@ class App(tk.Tk):
             if hasattr(self, "queue_frame") and self.queue_frame.winfo_manager():
                 self.queue_frame.pack_forget()
             if not self.ai_engine_frame.winfo_manager():
-                self.ai_engine_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+                self.ai_engine_frame.pack(fill=tk.BOTH, expand=True)
         if hasattr(self, "ai_engine_toggle_button"):
             self.ai_engine_toggle_button.config(text=self._get_ai_engine_toggle_text())
 
@@ -1763,12 +1250,10 @@ class App(tk.Tk):
         urls = self.url_text.get("1.0", tk.END)
         url_list = _parse_urls(urls)
         logger.debug("Parsed URLs count=%s", len(url_list))
-        for line in url_list:
-            item = {"kind": "url", "value": line}
-            with self.queue_items_lock:
-                self.queue_items.append(item)
+        for item in _build_source_queue(url_list, []):
+            self.queue_controller.add_item(item)
             self.queue_list.insert(tk.END, _queue_item_label(item))
-            logger.debug("URL added to queue: %s", line)
+            logger.debug("URL added to queue: %s", item["value"])
         self.url_text.delete("1.0", tk.END)
         logger.info("URLs added to queue count=%s", len(url_list))
 
@@ -1784,24 +1269,20 @@ class App(tk.Tk):
         if not file_paths:
             logger.debug("Audio file selection cancelled")
             return
-        for path in file_paths:
-            item = {"kind": "file", "value": path}
-            with self.queue_items_lock:
-                self.queue_items.append(item)
+        for item in _build_source_queue([], file_paths):
+            self.queue_controller.add_item(item)
             self.queue_list.insert(tk.END, _queue_item_label(item))
-            logger.debug("Audio file added to queue: %s", path)
+            logger.debug("Audio file added to queue: %s", item["value"])
         logger.debug("Audio files selected count=%s", len(file_paths))
 
     def clear_queue(self):
         self.queue_list.delete(0, tk.END)
-        with self.queue_items_lock:
-            self.queue_items = []
-        self.queue_total = 0
+        self.queue_controller.clear()
         logger.debug("Queue cleared")
 
     def start_queue(self):
         logger.info("Start queue requested")
-        if self.is_running:
+        if self.queue_controller.is_running:
             logger.warning("Queue already running, ignoring start request")
             return
         if _should_translate(self.enable_translation_var.get()):
@@ -1820,19 +1301,16 @@ class App(tk.Tk):
         if self.url_text.get("1.0", tk.END).strip():
             logger.debug("Adding pending URLs before starting queue")
             self.add_urls_to_queue()
-        with self.queue_items_lock:
-            if not self.queue_items:
-                logger.warning("Queue is empty, cannot start")
-                messagebox.showwarning(self.get_text("notice"), self.get_text("queue_empty"))
-                return
-            self.queue_total = len(self.queue_items)
-        logger.info("Starting queue processing total_items=%s", self.queue_total)
-        self.is_running = True
+        if not self.queue_controller.start():
+            logger.warning("Queue is empty, cannot start")
+            messagebox.showwarning(self.get_text("notice"), self.get_text("queue_empty"))
+            return
+        logger.info("Starting queue processing total_items=%s", self.queue_controller.total)
         self._process_next_queue_item()
 
     def stop_queue(self):
         logger.info("Stop queue requested")
-        self.is_running = False
+        self.queue_controller.stop()
 
     def browse_output_dir(self):
         directory = filedialog.askdirectory(title=self.get_text("choose_output_folder"))
@@ -1843,8 +1321,7 @@ class App(tk.Tk):
 
     def open_output_dir(self):
         output_dir = (self.asr_output_path.get() or "").strip() or "transcriptions"
-        output_dir = os.path.abspath(output_dir)
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir = str(ensure_output_directory(os.path.abspath(output_dir)))
 
         try:
             if sys.platform.startswith("darwin"):
@@ -1860,192 +1337,45 @@ class App(tk.Tk):
             logger.debug("Output directory selected: %s", directory)
 
     def _process_next_queue_item(self):
-        if not self.is_running:
+        if not self.queue_controller.is_running:
             logger.debug("Queue processing stopped by user")
             return
-        with self.queue_items_lock:
-            item = _pop_next_queue_item(self.queue_items)
-            if item is None:
-                self.is_running = False
-                self.status_label.config(text=self.get_text("queue_done"))
-                logger.info("Queue processing completed")
-                return
-            current_index = self.queue_total - len(self.queue_items)
-            remaining = len(self.queue_items)
+        next_item = self.queue_controller.next_item()
+        if next_item is None:
+            self.status_label.config(text=self.get_text("queue_done"))
+            logger.info("Queue processing completed")
+            return
+        current_index, remaining, item = next_item
         logger.debug("Processing queue item index=%s/%s remaining=%s kind=%s",
-                     current_index, self.queue_total, remaining, item.get("kind"))
-        self.status_label.config(text=_queue_status_text(current_index, self.queue_total, self.get_text("queue_processing")))
+                     current_index, self.queue_controller.total, remaining, item.get("kind"))
+        self.status_label.config(text=_queue_status_text(current_index, self.queue_controller.total, self.get_text("queue_processing")))
         self._run_queue_item(item, current_index)
 
     def _run_queue_item(self, item, index):
-        def _run():
-            try:
-                logger.debug("Queue item execution started index=%s kind=%s", index, item["kind"])
-                if item["kind"] == "url":
-                    logger.info("Downloading audio from URL: %s", item["value"])
-                    from src.asr.audio_downloader import AudioDownloader
-                    downloader = AudioDownloader(output_dir="downloads")
-                    audio_path = downloader.download_audio_to_wav(item["value"])
-                    logger.info("Audio downloaded successfully: %s", audio_path)
-                else:
-                    audio_path = item["value"]
-                    logger.debug("Using local audio file: %s", audio_path)
-
-                if not audio_path or not os.path.exists(audio_path):
-                    logger.error("Audio file not found: %s", audio_path)
-                    raise FileNotFoundError(self.get_text("audio_missing").format(audio_path))
-
-                prefer_source_dir = item.get("kind") == "file"
-                output_path = self._resolve_asr_output_path(audio_path, prefer_source_dir=prefer_source_dir)
-                logger.debug("ASR output path resolved: %s", output_path)
-                self._run_asr_request(audio_path, output_path)
-                logger.info("ASR completed for index=%s output=%s", index, output_path)
-
-                if self.enable_summary_var.get():
-                    logger.debug("Summary enabled, starting summary for: %s", output_path)
-                    self._run_summary_for_output(output_path, index)
-                else:
-                    logger.debug("Summary disabled, skipping")
-
-                if _should_translate(self.enable_translation_var.get()):
-                    logger.debug("Translation enabled, starting translation for: %s", output_path)
-                    self._run_translation_for_output(output_path, index)
-                else:
-                    logger.debug("Translation disabled, skipping")
-
-                self.after(0, lambda: self._on_queue_item_done(index, True, output_path))
-            except Exception as exc:
-                logger.error("Queue item failed index=%s error=%s", index, exc)
-                error_msg = str(exc)
-                self.after(0, lambda msg=error_msg: self._on_queue_item_done(index, False, msg))
-
-        thread = threading.Thread(target=_run, daemon=True)
-        thread.start()
+        logger.debug("Queue item execution started index=%s kind=%s", index, item["kind"])
+        run_queue_item(self, item, index)
 
     def _run_asr_request(self, audio_path, output_path):
-        if not self.asr_coordinator:
-            raise RuntimeError(self.get_text("asr_not_available"))
-
-        from src.application.asr_coordinator import ASRRequest
-
-        language = self._resolve_asr_language()
-
-        request = ASRRequest(
-            input_path=audio_path,
-            output_path=output_path,
-            model_path=self.asr_model_path.get(),
-            language=language,
-            use_gpu=self.use_gpu_var.get(),
-            gpu_backend=self.gpu_backend.get(),
-            n_threads=4,
-            output_format=self.output_format.get(),
-            max_retries=1
-        )
-        self.asr_coordinator.run(request)
+        run_asr_request(self, audio_path, output_path)
 
     def _resolve_asr_output_path(self, audio_path, prefer_source_dir: bool = True):
-        output_dir = self.asr_output_path.get().strip() or "transcriptions"
-        if self.output_to_source_var.get() and prefer_source_dir and audio_path:
-            source_dir = os.path.dirname(os.path.abspath(audio_path))
-            if source_dir:
-                output_dir = source_dir
-
-        os.makedirs(output_dir, exist_ok=True)
-        base_name = os.path.splitext(os.path.basename(audio_path))[0]
-        ext = self.output_format.get()
-        return os.path.join(output_dir, f"{base_name}.{ext}")
+        return resolve_asr_output_path(self, audio_path, prefer_source_dir=prefer_source_dir)
 
     def _run_translation_for_output(self, output_path, index):
-        if not output_path.lower().endswith(".srt"):
-            logger.warning("Translation skipped (non-srt) path=%s", output_path)
-            return
-        self.after(
-            0,
-            lambda: self.status_label.config(
-                text=_queue_status_text(index, self.queue_total, self.get_text("queue_translating"))
-            )
-        )
-        if self.translation_engine_key == "libretranslate":
-            translation_client = self.free_translation_client
-        else:
-            translation_client = self._build_ollama_client()
-        thread = TranslationThread(
-            output_path,
-            self.source_lang.get(),
-            self.target_lang.get(),
-            self.model_combo.get(),
-            self.parallel_requests.get(),
-            self.update_progress,
-            self.file_translated,
-            self.debug_mode_var.get(),
-            self.replace_original_var.get(),
-            self.use_alt_prompt_var.get(),
-            translation_client=translation_client,
-        )
-        thread.set_app(self)
-        thread.start()
-        # Don't join() - it blocks the UI thread. The thread will call back via file_translated()
+        run_translation_for_output(self, output_path, index)
 
     def _run_summary_for_output(self, output_path, index):
-        if not output_path:
-            return
-
-        def _load_text(path: str) -> str:
-            if path.lower().endswith(".srt"):
-                subs = pysrt.open(path)
-                return "\n".join(sub.text for sub in subs)
-            if path.lower().endswith(".txt"):
-                with open(path, "r", encoding="utf-8") as f:
-                    return f.read()
-            return ""
-
-        def _summary_output_path(path: str) -> str:
-            base, _ext = os.path.splitext(path)
-            return f"{base}.summary.txt"
-
-        def _run():
-            try:
-                text = _load_text(output_path)
-                if not text.strip():
-                    logger.warning("Summary skipped (empty) path=%s", output_path)
-                    return
-                prompt = self._get_summary_prompt()
-                client = self._build_ollama_client()
-                summary = client.translate_text(
-                    text=text,
-                    source_lang=None,
-                    target_lang="a concise summary in English",
-                    model_name=self.model_combo.get(),
-                    system_prompt=prompt,
-                )
-                out_path = _summary_output_path(output_path)
-                with open(out_path, "w", encoding="utf-8") as f:
-                    f.write(summary.strip() + "\n")
-                logger.info("Summary saved output=%s", out_path)
-                self.after(0, lambda: self.status_label.config(
-                    text=_queue_status_text(index, self.queue_total, self.get_text("queue_summary_done"))
-                ))
-            except Exception as exc:
-                logger.error("Summary failed path=%s error=%s", output_path, exc)
-
-        self.after(
-            0,
-            lambda: self.status_label.config(
-                text=_queue_status_text(index, self.queue_total, self.get_text("queue_summary"))
-            )
-        )
-        thread = threading.Thread(target=_run, daemon=True)
-        thread.start()
+        run_summary_for_output(self, output_path, index)
 
     def _on_queue_item_done(self, index, success, message):
         if success:
-            self.status_label.config(text=_queue_status_text(index, self.queue_total, self.get_text("queue_done")))
+            self.status_label.config(text=_queue_status_text(index, self.queue_controller.total, self.get_text("queue_done")))
         else:
             self.status_label.config(
-                text=f"{_queue_status_text(index, self.queue_total, self.get_text('queue_failed'))}: {message}"
+                text=f"{_queue_status_text(index, self.queue_controller.total, self.get_text('queue_failed'))}: {message}"
             )
 
-        if self.is_running:
+        if self.queue_controller.is_running:
             self._process_next_queue_item()
 
     # ========== ASR Methods ==========
@@ -2260,16 +1590,7 @@ class App(tk.Tk):
     def get_model_list(self):
         import urllib.request
         import json
-        endpoint = self._get_openai_endpoint()
-        base = endpoint.rstrip("/")
-        if base.endswith("/v1/chat/completions"):
-            base = base[: -len("/v1/chat/completions")]
-        elif base.endswith("/chat/completions"):
-            base = base[: -len("/chat/completions")]
-        if base.endswith("/v1"):
-            url = f"{base}/models"
-        else:
-            url = f"{base}/v1/models"
+        url = build_models_endpoint(self._get_openai_endpoint())
         logger.debug("Fetching model list from endpoint=%s", url)
         try:
             with urllib.request.urlopen(url) as response:
@@ -2310,50 +1631,44 @@ class App(tk.Tk):
             logger.debug("Pre-translation cleaning enabled")
             self.status_label.config(text=self.get_text("cleaning"))
             self.update_idletasks()
-            
-            total_cleaned = 0
-            total_subtitles = 0
-            
-            for i in range(self.file_list.size()):
-                input_file = self.file_list.get(i)
-                try:
-                    # 清理檔案並獲取結果
-                    result = clean_srt_file(input_file, self.replace_original_var.get())
-                    
-                    total_cleaned += result["cleaned"]
-                    total_subtitles += result["total"]
-                    
-                    # 更新進度
-                    progress = (i + 1) / self.file_list.size() * 100
-                    self.progress_bar['value'] = progress
-                    self.status_label.config(
-                        text=self.get_text("cleaning_progress").format(
-                            i+1,
-                            self.file_list.size(),
-                            progress,
-                            total_cleaned,
-                            total_subtitles
-                        )
+
+            def _on_clean_progress(progress):
+                self.progress_bar["value"] = progress.progress_percent
+                self.status_label.config(
+                    text=self.get_text("cleaning_progress").format(
+                        progress.current_file,
+                        progress.total_files,
+                        progress.progress_percent,
+                        progress.total_cleaned,
+                        progress.total_subtitles,
                     )
-                    self.update_idletasks()
-                    
-                except Exception as e:
-                    messagebox.showerror(
-                        self.get_text("error"),
-                        str(e)
-                    )
-                    return
+                )
+                self.update_idletasks()
+
+            try:
+                clean_summary = run_clean_workflow(
+                    self._file_list_paths(),
+                    clean_srt_file,
+                    create_backup=self.replace_original_var.get(),
+                    on_progress=_on_clean_progress,
+                )
+            except Exception as exc:
+                messagebox.showerror(
+                    self.get_text("error"),
+                    str(exc),
+                )
+                return
 
             self.status_label.config(
                 text=self.get_text("cleaning_complete").format(
-                    total_cleaned,
-                    total_subtitles
+                    clean_summary.total_cleaned,
+                    clean_summary.total_subtitles,
                 )
             )
             logger.debug(
                 "Pre-translation cleaning completed total_cleaned=%s total_subtitles=%s",
-                total_cleaned,
-                total_subtitles,
+                clean_summary.total_cleaned,
+                clean_summary.total_subtitles,
             )
             self.update_idletasks()
 
@@ -2361,64 +1676,9 @@ class App(tk.Tk):
         self.progress_bar['value'] = 0
         total_files = self.file_list.size()
 
-        if self.coordinator and self.translation_engine_key != "libretranslate":
-            from src.application.models import TranslationRequest
-
-            self.coordinator.translation_client = self._build_ollama_client()
-            self.coordinator.prompt_provider = self._build_prompt_provider()
-            request = TranslationRequest(
-                file_paths=[self.file_list.get(i) for i in range(total_files)],
-                source_lang=self.source_lang.get(),
-                target_lang=self.target_lang.get(),
-                model_name=self.model_combo.get(),
-                ui_language=self.current_language.get(),
-                parallel_requests=int(self.parallel_requests.get()),
-                clean_before_translate=self.clean_mode_var.get(),
-                replace_original=self.replace_original_var.get(),
-                use_alt_prompt=self.use_alt_prompt_var.get(),
-            )
-            logger.info(
-                "Dispatching coordinator request files=%s source=%s target=%s model=%s parallel=%s clean=%s replace=%s alt_prompt=%s",
-                total_files,
-                request.source_lang,
-                request.target_lang,
-                request.model_name,
-                request.parallel_requests,
-                request.clean_before_translate,
-                request.replace_original,
-                request.use_alt_prompt,
-            )
-            self.coordinator.run_async(request, callback=self._on_coordinator_done)
-            self.status_label.config(
-                text=self.get_text("translating").format(total_files)
-            )
+        file_paths = [self.file_list.get(i) for i in range(total_files)]
+        if not self._start_translation_request(file_paths, done_callback=self._on_coordinator_done):
             return
-        
-        # 開始翻譯
-        if self.translation_engine_key == "libretranslate":
-            translation_client = self.free_translation_client
-        else:
-            translation_client = self._build_ollama_client()
-        prompt_provider = self._build_prompt_provider()
-        for i in range(total_files):
-            file_path = self.file_list.get(i)
-            thread = TranslationThread(
-                file_path, 
-                self.source_lang.get(), 
-                self.target_lang.get(), 
-                self.model_combo.get(),
-                self.parallel_requests.get(),
-                self.update_progress,
-                self.file_translated,
-                self.debug_mode_var.get(),
-                self.replace_original_var.get(),
-                self.use_alt_prompt_var.get(),
-                prompt_provider=prompt_provider,
-                translation_client=translation_client,
-            )
-            thread.set_app(self)
-            thread.start()
-            logger.debug("Started legacy translation thread file=%s", file_path)
 
         self.status_label.config(
             text=self.get_text("translating").format(total_files)
@@ -2426,6 +1686,25 @@ class App(tk.Tk):
 
     def _on_coordinator_done(self, summary):
         self.after(0, lambda: self._on_coordinator_complete(summary))
+
+    def _on_queue_translation_complete(self, output_path, index, summary):
+        actual_output_path = summary.output_paths[0] if getattr(summary, "output_paths", None) else output_path
+        logger.info(
+            "Queue translation completed path=%s index=%s success=%s failed=%s",
+            actual_output_path,
+            index,
+            summary.successful_files,
+            summary.failed_files,
+        )
+        if summary.successful_files > 0:
+            self.status_label.config(
+                text=_queue_status_text(index, self.queue_controller.total, self.get_text("queue_done"))
+            )
+            self.file_translated(f"翻譯完成 | 檔案已成功保存為: {actual_output_path}")
+        else:
+            self.status_label.config(
+                text=f"{_queue_status_text(index, self.queue_controller.total, self.get_text('queue_failed'))}: {actual_output_path}"
+            )
 
     def _on_coordinator_complete(self, summary):
         logger.info(
@@ -2435,23 +1714,19 @@ class App(tk.Tk):
             summary.failed_files,
             self.auto_clean_workspace_var.get(),
         )
-        if self.auto_clean_workspace_var.get():
-            self.file_list.delete(0, tk.END)
-            self.status_label.config(text=self.get_text("workspace_cleaned"))
-            self.progress_bar['value'] = 0
-            messagebox.showinfo(
-                self.get_text("confirm"),
-                self.get_text("workspace_cleaned"),
-            )
-            return
-
-        self.status_label.config(
-            text=f"{self.get_text('all_complete')} (ok={summary.successful_files}, failed={summary.failed_files})"
+        completion_state = resolve_translation_completion(
+            summary,
+            auto_clean_workspace=self.auto_clean_workspace_var.get(),
+            get_text=self.get_text,
         )
-        self.progress_bar['value'] = 0
+        if completion_state.clear_workspace:
+            self.file_list.delete(0, tk.END)
+        self.status_label.config(text=completion_state.status_text)
+        if completion_state.reset_progress:
+            self.progress_bar["value"] = 0
         messagebox.showinfo(
             self.get_text("confirm"),
-            self.get_text("all_complete"),
+            completion_state.dialog_text,
         )
 
     def on_coordinator_event(self, event):
@@ -2495,19 +1770,6 @@ class App(tk.Tk):
 
     def update_progress(self, current, total, extra_data=None):
         """更新進度"""
-        if extra_data and extra_data.get("type") == "file_conflict":
-            logger.debug("File conflict progress event path=%s", extra_data.get("path"))
-            # 在主線程中顯示對話框
-            result = self.show_countdown_dialog(
-                self.get_text("file_conflict_message").format(os.path.basename(extra_data['path'])),
-                countdown=5
-            )
-            
-            # 將結果發送回翻譯線程
-            extra_data["queue"].put(result)
-            logger.debug("File conflict result sent result=%s", result)
-            return
-            
         # 正常的進度更新
         if current >= 0 and total >= 0:
             percentage = int(current / total * 100)
@@ -2525,51 +1787,27 @@ class App(tk.Tk):
     def file_translated(self, message):
         """處理檔案翻譯完成的回調"""
         logger.debug("File translated callback message=%s", message)
-        current_text = self.status_label.cget("text")
-        self.status_label.config(text=f"{current_text}\n{message}")
-        
-        # 檢查是否所有檔案都已翻譯完成
-        if "翻譯完成" in message:
-            # 從檔案列表中移除已翻譯的檔案
-            if self.auto_clean_workspace_var.get():
-                logger.debug("Auto-cleanup enabled, processing completed file")
-                # Extract the output path from message format: "翻譯完成 | 檔案已成功保存為: {path}"
-                if "檔案已成功保存為:" in message:
-                    completed_path = message.split("檔案已成功保存為:")[-1].strip()
-                    completed_basename = os.path.basename(completed_path)
-                    logger.debug("Extracted completed file basename=%s", completed_basename)
-
-                    for i in range(self.file_list.size()):
-                        file_basename = os.path.basename(self.file_list.get(i))
-                        # Exact match to avoid false positives (e.g., "test.srt" vs "contest.srt")
-                        if file_basename == completed_basename:
-                            logger.info("Removing completed file from list index=%s basename=%s", i, file_basename)
-                            self.file_list.delete(i)
-                            break
-                    else:
-                        logger.warning("Completed file not found in list basename=%s", completed_basename)
-                else:
-                    logger.warning("Cannot extract output path from message: %s", message)
-            else:
-                logger.debug("Auto-cleanup disabled, keeping file in list")
-
-            # 如果檔案列表為空且啟用了自動清理，顯示完成訊息
-            if self.file_list.size() == 0 and self.auto_clean_workspace_var.get():
-                logger.info("All files processed, workspace cleaned")
-                self.status_label.config(text=self.get_text("workspace_cleaned"))
-                self.progress_bar['value'] = 0
-                messagebox.showinfo(
-                    self.get_text("confirm"),
-                    self.get_text("workspace_cleaned")
-                )
-            # 如果檔案列表不為空或未啟用自動清理，只顯示翻譯完成訊息
-            elif not self.auto_clean_workspace_var.get():
-                self.status_label.config(text=self.get_text("all_complete"))
-                self.progress_bar['value'] = 0
-                messagebox.showinfo(
-                    self.get_text("confirm"),
-                    self.get_text("all_complete")
-                )
+        update = resolve_file_translation_update(
+            message=message,
+            current_status_text=self.status_label.cget("text"),
+            file_paths=self._file_list_paths(),
+            auto_clean_workspace=self.auto_clean_workspace_var.get(),
+            get_text=self.get_text,
+        )
+        self.status_label.config(text=update.appended_status_text)
+        if update.remove_index is not None:
+            removed_path = self.file_list.get(update.remove_index)
+            logger.info("Removing completed file from list index=%s path=%s", update.remove_index, removed_path)
+            self.file_list.delete(update.remove_index)
+        if update.final_status_text is not None:
+            self.status_label.config(text=update.final_status_text)
+        if update.reset_progress:
+            self.progress_bar["value"] = 0
+        if update.dialog_text is not None:
+            messagebox.showinfo(
+                self.get_text("confirm"),
+                update.dialog_text,
+            )
 
     def show_context_menu(self, event):
         """顯示右鍵選單"""
@@ -2648,136 +1886,37 @@ class App(tk.Tk):
         if self.file_list.size() == 0:
             messagebox.showwarning(self.get_text("notice"), self.get_text("select_srt_first"))
             return
-            
-        # 創建備份目錄
-        backup_path = os.path.join(os.path.dirname(self.file_list.get(0)), 'backup')
-        ensure_backup_dir(backup_path)
 
         # 更新狀態標籤
         self.status_label.config(text=self.get_text("cleaning_files"))
         self.update_idletasks()
 
-        total_cleaned = 0
-        total_files = self.file_list.size()
-
-        for i in range(total_files):
-            input_file = self.file_list.get(i)
-            try:
-                # 清理檔案並獲取結果
-                result = clean_srt_file(input_file, create_backup=True)
-                total_cleaned += result["cleaned"]
-                    
-                # 更新進度
-                progress = (i + 1) / self.file_list.size() * 100
-                self.progress_bar['value'] = progress
-                self.status_label.config(
-                    text=self.get_text("cleaning_progress_simple").format(
-                        i + 1,
-                        self.file_list.size(),
-                        progress,
-                    )
+        def _on_clean_progress(progress):
+            self.progress_bar["value"] = progress.progress_percent
+            self.status_label.config(
+                text=self.get_text("cleaning_progress_simple").format(
+                    progress.current_file,
+                    progress.total_files,
+                    progress.progress_percent,
                 )
-                self.update_idletasks()
-                
-            except Exception as e:
-                messagebox.showerror(self.get_text("error"), self.get_text("clean_error").format(str(e)))
-                return
+            )
+            self.update_idletasks()
+
+        try:
+            run_clean_workflow(
+                self._file_list_paths(),
+                clean_srt_file,
+                create_backup=True,
+                on_progress=_on_clean_progress,
+            )
+        except Exception as exc:
+            messagebox.showerror(self.get_text("error"), self.get_text("clean_error").format(str(exc)))
+            return
 
         # 完成後重置進度條和狀態
         self.progress_bar['value'] = 0
         self.status_label.config(text=self.get_text("cleaning_done"))
         messagebox.showinfo(self.get_text("done"), self.get_text("clean_done_detail"))
-
-    def show_countdown_dialog(self, message, countdown=5):
-        """顯示帶有倒計時的對話框"""
-        logger.debug("Showing conflict dialog countdown=%s message=%s", countdown, message)
-        # 創建新視窗
-        countdown_window = tk.Toplevel(self)
-        countdown_window.title(self.get_text("file_conflict_title"))
-        countdown_window.geometry("400x200")
-        countdown_window.transient(self)  # 設置為主視窗的子視窗
-        countdown_window.grab_set()  # 模態視窗
-        countdown_window.resizable(False, False)  # 禁止調整視窗大小
-        
-        # 保存視窗引用
-        self.countdown_window = countdown_window
-        self.dialog_result = None
-
-        # 創建主框架
-        main_frame = ttk.Frame(countdown_window, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # 添加訊息標籤
-        message_label = ttk.Label(main_frame, text=message, wraplength=350, justify="center")
-        message_label.pack(pady=(0, 10))
-        
-        # 添加倒計時標籤
-        self.countdown_label = ttk.Label(main_frame, text=self.get_text("auto_rename_countdown").format(countdown), font=("Arial", 10, "bold"))
-        self.countdown_label.pack(pady=(0, 20))
-        
-        # 添加按鈕框架
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(pady=(0, 10))
-        
-        # 設置按鈕樣式
-        style = ttk.Style()
-        style.configure("Action.TButton", padding=5)
-        
-        # 添加按鈕
-        overwrite_btn = ttk.Button(
-            button_frame, 
-            text=self.get_text("overwrite"), 
-            style="Action.TButton",
-            command=lambda: self.set_dialog_result("overwrite")
-        )
-        overwrite_btn.pack(side=tk.LEFT, padx=5)
-        
-        rename_btn = ttk.Button(
-            button_frame, 
-            text=self.get_text("rename"), 
-            style="Action.TButton",
-            command=lambda: self.set_dialog_result("rename")
-        )
-        rename_btn.pack(side=tk.LEFT, padx=5)
-        
-        skip_btn = ttk.Button(
-            button_frame, 
-            text=self.get_text("skip"), 
-            style="Action.TButton",
-            command=lambda: self.set_dialog_result("skip")
-        )
-        skip_btn.pack(side=tk.LEFT, padx=5)
-        
-        # 開始倒計時
-        def update_countdown():
-            nonlocal countdown
-            if countdown > 0 and self.dialog_result is None:
-                countdown -= 1
-                self.countdown_label.config(text=self.get_text("auto_rename_countdown").format(countdown))
-                countdown_window.after(1000, update_countdown)
-            elif self.dialog_result is None:
-                self.set_dialog_result("rename")
-        
-        # 置中顯示視窗
-        countdown_window.update_idletasks()
-        width = countdown_window.winfo_width()
-        height = countdown_window.winfo_height()
-        x = (countdown_window.winfo_screenwidth() // 2) - (width // 2)
-        y = (countdown_window.winfo_screenheight() // 2) - (height // 2)
-        countdown_window.geometry(f"{width}x{height}+{x}+{y}")
-        
-        countdown_window.after(1000, update_countdown)
-        countdown_window.wait_window()
-        logger.debug("Conflict dialog closed result=%s", self.dialog_result)
-        return self.dialog_result
-
-    def set_dialog_result(self, result):
-        """設置對話框結果並關閉視窗"""
-        self.dialog_result = result
-        logger.debug("Conflict dialog result set result=%s", result)
-        if self.countdown_window:
-            self.countdown_window.destroy()
-            self.countdown_window = None
 
     def delete_selected_file(self, event=None):
         """刪除選中的檔案"""
@@ -2819,7 +1958,7 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-    def _collect_config(self) -> dict[str, Any]:
+    def _snapshot_settings(self) -> AppSettings:
         if hasattr(self, "summary_prompt_text"):
             self._set_summary_prompt_for_language(
                 self.current_language.get(),
@@ -2835,7 +1974,7 @@ class App(tk.Tk):
                 self.current_language.get(),
                 self.alt_translation_prompt_text.get("1.0", tk.END),
             )
-        return {
+        return snapshot_settings({
             "ui_language": self.current_language.get(),
             "translation_engine_key": self.translation_engine_key,
             "source_lang": self.source_lang.get() if hasattr(self, "source_lang") else "",
@@ -2843,7 +1982,6 @@ class App(tk.Tk):
             "model_name": self.model_combo.get() if hasattr(self, "model_combo") else "",
             "parallel_requests": self.parallel_requests.get() if hasattr(self, "parallel_requests") else "",
             "openai_endpoint": self._get_openai_endpoint(),
-            "openai_api_key": self._get_openai_api_key(),
             "summary_prompt_zh_tw": self._get_summary_prompt_for_language("zh_tw"),
             "summary_prompt_zh_cn": self._get_summary_prompt_for_language("zh_cn"),
             "summary_prompt_en": self._get_summary_prompt_for_language("en"),
@@ -2868,50 +2006,51 @@ class App(tk.Tk):
             "asr_language": self.asr_lang.get() if hasattr(self, "asr_lang") else "",
             "output_format": self.output_format.get() if hasattr(self, "output_format") else "",
             "asr_output_path": self.asr_output_path.get() if hasattr(self, "asr_output_path") else "",
-        }
+        })
 
-    def _apply_config(self, config: dict[str, Any]) -> None:
-        ui_language = config.get("ui_language")
-        if ui_language in self.translations:
-            self.current_language.set(ui_language)
+    def _apply_settings(self, settings: AppSettings, legacy_api_key: str = "") -> None:
+        if settings.ui_language in self.translations:
+            self.current_language.set(settings.ui_language)
 
-        self.translation_engine_key = config.get("translation_engine_key", self.translation_engine_key)
+        self.translation_engine_key = settings.translation_engine_key or self.translation_engine_key
         self.translation_engine_var.set(self._label_for_engine(self.translation_engine_key))
 
         self.update_ui_language()
 
-        source_lang = config.get("source_lang")
+        source_lang = settings.source_lang
         if hasattr(self, "source_lang") and source_lang:
             if source_lang in self.source_lang["values"]:
                 self.source_lang.set(source_lang)
 
-        target_lang = config.get("target_lang")
+        target_lang = settings.target_lang
         if hasattr(self, "target_lang") and target_lang:
             if target_lang in self.target_lang["values"]:
                 self.target_lang.set(target_lang)
 
-        model_name = config.get("model_name")
+        model_name = settings.model_name
         if hasattr(self, "model_combo") and model_name:
             self.model_combo.set(model_name)
 
-        parallel_requests = config.get("parallel_requests")
+        parallel_requests = settings.parallel_requests
         if hasattr(self, "parallel_requests") and parallel_requests:
             self.parallel_requests.set(str(parallel_requests))
 
         if hasattr(self, "openai_endpoint"):
-            endpoint_value = config.get("openai_endpoint") or self._get_openai_endpoint()
+            endpoint_value = settings.openai_endpoint or self._get_openai_endpoint()
             self.openai_endpoint.delete(0, tk.END)
             self.openai_endpoint.insert(0, endpoint_value)
         if hasattr(self, "openai_api_key"):
-            api_key_value = config.get("openai_api_key") or ""
+            api_key_value = self._get_openai_api_key()
+            if legacy_api_key:
+                api_key_value = legacy_api_key
+                logger.warning("Legacy plaintext API key detected in config; it will not be persisted on next save")
             self.openai_api_key.delete(0, tk.END)
             self.openai_api_key.insert(0, api_key_value)
         if not hasattr(self, "summary_prompts_by_language"):
             self.summary_prompts_by_language = {}
         for lang in ("zh_tw", "zh_cn", "en"):
             key = f"summary_prompt_{lang}"
-            if key in config:
-                self.summary_prompts_by_language[lang] = str(config.get(key) or "").strip()
+            self.summary_prompts_by_language[lang] = str(getattr(settings, key) or "").strip()
         if hasattr(self, "summary_prompt_text"):
             self._refresh_summary_prompt_text()
 
@@ -2919,8 +2058,7 @@ class App(tk.Tk):
             self.translation_prompts_by_language = {}
         for lang in ("zh_tw", "zh_cn", "en"):
             key = f"translation_prompt_{lang}"
-            if key in config:
-                self.translation_prompts_by_language[lang] = str(config.get(key) or "").strip()
+            self.translation_prompts_by_language[lang] = str(getattr(settings, key) or "").strip()
         if hasattr(self, "translation_prompt_text"):
             self._refresh_translation_prompt_text()
 
@@ -2928,40 +2066,39 @@ class App(tk.Tk):
             self.alt_translation_prompts_by_language = {}
         for lang in ("zh_tw", "zh_cn", "en"):
             key = f"alt_translation_prompt_{lang}"
-            if key in config:
-                self.alt_translation_prompts_by_language[lang] = str(config.get(key) or "").strip()
+            self.alt_translation_prompts_by_language[lang] = str(getattr(settings, key) or "").strip()
         if hasattr(self, "alt_translation_prompt_text"):
             self._refresh_alt_translation_prompt_text()
 
         if hasattr(self, "enable_translation_var"):
-            self.enable_translation_var.set(bool(config.get("enable_translation", self.enable_translation_var.get())))
+            self.enable_translation_var.set(settings.enable_translation)
         if hasattr(self, "enable_summary_var"):
-            self.enable_summary_var.set(bool(config.get("enable_summary", self.enable_summary_var.get())))
+            self.enable_summary_var.set(settings.enable_summary)
         if hasattr(self, "ai_engine_collapsed_var"):
-            self.ai_engine_collapsed_var.set(bool(config.get("ai_engine_collapsed", True)))
-        self.clean_mode_var.set(bool(config.get("clean_mode", self.clean_mode_var.get())))
-        self.debug_mode_var.set(bool(config.get("debug_mode", self.debug_mode_var.get())))
-        self.auto_clean_workspace_var.set(bool(config.get("auto_clean_workspace", self.auto_clean_workspace_var.get())))
-        self.replace_original_var.set(bool(config.get("replace_original", self.replace_original_var.get())))
-        self.use_alt_prompt_var.set(bool(config.get("use_alt_prompt", self.use_alt_prompt_var.get())))
-        self.output_to_source_var.set(bool(config.get("output_to_source", self.output_to_source_var.get())))
+            self.ai_engine_collapsed_var.set(settings.ai_engine_collapsed)
+        self.clean_mode_var.set(settings.clean_mode)
+        self.debug_mode_var.set(settings.debug_mode)
+        self.auto_clean_workspace_var.set(settings.auto_clean_workspace)
+        self.replace_original_var.set(settings.replace_original)
+        self.use_alt_prompt_var.set(settings.use_alt_prompt)
+        self.output_to_source_var.set(settings.output_to_source)
 
-        if hasattr(self, "asr_model_path") and config.get("asr_model_path"):
+        if hasattr(self, "asr_model_path") and settings.asr_model_path:
             self.asr_model_path.delete(0, tk.END)
-            self.asr_model_path.insert(0, config.get("asr_model_path"))
+            self.asr_model_path.insert(0, settings.asr_model_path)
         if hasattr(self, "use_gpu_var"):
-            self.use_gpu_var.set(bool(config.get("use_gpu", self.use_gpu_var.get())))
-        if hasattr(self, "gpu_backend") and config.get("gpu_backend"):
-            self.gpu_backend.set(config.get("gpu_backend"))
-        if hasattr(self, "asr_lang") and config.get("asr_language"):
-            if config.get("asr_language") in self.asr_lang["values"]:
-                self.asr_lang.set(config.get("asr_language"))
-        if hasattr(self, "output_format") and config.get("output_format"):
-            if config.get("output_format") in self.output_format["values"]:
-                self.output_format.set(config.get("output_format"))
-        if hasattr(self, "asr_output_path") and config.get("asr_output_path"):
+            self.use_gpu_var.set(settings.use_gpu)
+        if hasattr(self, "gpu_backend") and settings.gpu_backend:
+            self.gpu_backend.set(settings.gpu_backend)
+        if hasattr(self, "asr_lang") and settings.asr_language:
+            if settings.asr_language in self.asr_lang["values"]:
+                self.asr_lang.set(settings.asr_language)
+        if hasattr(self, "output_format") and settings.output_format:
+            if settings.output_format in self.output_format["values"]:
+                self.output_format.set(settings.output_format)
+        if hasattr(self, "asr_output_path") and settings.asr_output_path:
             self.asr_output_path.delete(0, tk.END)
-            self.asr_output_path.insert(0, config.get("asr_output_path"))
+            self.asr_output_path.insert(0, settings.asr_output_path)
 
         self._apply_ai_engine_visibility()
         self.toggle_translation_options()
@@ -2972,19 +2109,16 @@ class App(tk.Tk):
             if not os.path.exists(self.config_path):
                 self._save_config()
                 return
-            with open(self.config_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                self._apply_config(data)
-                logger.debug("Config loaded path=%s", self.config_path)
+            settings, legacy_api_key = load_settings(self.config_path)
+            settings = with_endpoint_default(settings, self._get_openai_endpoint())
+            self._apply_settings(settings, legacy_api_key=legacy_api_key)
+            logger.debug("Config loaded path=%s", self.config_path)
         except Exception as exc:
             logger.warning("Failed to load config path=%s error=%s", self.config_path, exc)
 
     def _save_config(self) -> None:
         try:
-            data = self._collect_config()
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=True, indent=2, sort_keys=True)
+            save_settings(self.config_path, self._snapshot_settings())
             logger.debug("Config saved path=%s", self.config_path)
         except Exception as exc:
             logger.warning("Failed to save config path=%s error=%s", self.config_path, exc)
