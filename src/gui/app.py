@@ -15,7 +15,7 @@ from src.utils.file_utils import ensure_backup_dir, clean_srt_file
 # 暫時禁用 tkinterdnd2（macOS 兼容性問題）
 # TODO: 修復 tkinterdnd2 後重新啟用
 TKDND_AVAILABLE = False
-print("提示：拖放功能已暫時停用（macOS 兼容性）")
+print("Note: Drag-and-drop is temporarily disabled (macOS compatibility).")
 
 from src.translation.translation_thread import TranslationThread
 from src.infrastructure.translation.libretranslate_client import LibreTranslateClient
