@@ -3,6 +3,7 @@ from tkinter import ttk, filedialog, messagebox, Menu
 import os
 import sys
 import logging
+import subprocess
 from queue import Queue
 import threading
 
@@ -55,7 +56,7 @@ class App(tk.Tk):
         self.current_language = tk.StringVar(value="zh_tw")  # 預設使用繁體中文
         self.translations = {
             "zh_tw": {
-                "window_title": "SRT 字幕翻譯器",
+                "window_title": "AI 語音轉譯器",
                 "select_files": "選擇 SRT 檔案",
                 "select_folder": "文件夾批量新增",
                 "source_lang_label": "原文語言:",
@@ -116,12 +117,14 @@ class App(tk.Tk):
                 "asr_language_options": ["自動偵測", "英文", "繁體中文", "簡體中文", "日文", "韓文", "法文", "德文", "西班牙文"],
                 "output_format": "輸出格式:",
                 "output_format_options": ["srt", "txt", "json", "verbose"],
+                "output_to_source": "輸出到原本位置（如有）",
+                "open_output_folder": "開啟輸出資料夾",
                 "start_asr": "開始轉錄",
                 "asr_not_available": "ASR 功能不可用",
                 "asr_not_available_msg": "Whisper transcriber not available. Please install whisper.cpp library and set up the model path.",
             },
             "en": {
-                "window_title": "SRT Subtitle Translator",
+                "window_title": "ai-whisper-translator",
                 "select_files": "Select SRT Files",
                 "select_folder": "Add Folder",
                 "source_lang_label": "Source Language:",
@@ -182,6 +185,8 @@ class App(tk.Tk):
                 "asr_language_options": ["Auto Detect", "English", "Traditional Chinese", "Simplified Chinese", "Japanese", "Korean", "French", "German", "Spanish"],
                 "output_format": "Output Format:",
                 "output_format_options": ["srt", "txt", "json", "verbose"],
+                "output_to_source": "Output to Source Folder (if available)",
+                "open_output_folder": "Open Output Folder",
                 "start_asr": "Start Transcription",
                 "asr_not_available": "ASR Not Available",
                 "asr_not_available_msg": "Whisper transcriber not available. Please install whisper.cpp library and set up the model path.",
@@ -189,7 +194,7 @@ class App(tk.Tk):
         }
 
         self.title(self.get_text("window_title"))
-        self.geometry("600x600")
+        self.geometry("980x680")
 
         # 只在有 tkinterdnd2 時啟用拖放功能
         if TKDND_AVAILABLE:
@@ -202,7 +207,9 @@ class App(tk.Tk):
         self.auto_clean_workspace_var = tk.BooleanVar(value=True)
         self.replace_original_var = tk.BooleanVar(value=False)
         self.use_alt_prompt_var = tk.BooleanVar(value=False)  # Add this line
+        self.output_to_source_var = tk.BooleanVar(value=False)
         self.queue_items = []
+        self.queue_items_lock = threading.Lock()
         self.queue_total = 0
         self.is_running = False
 
@@ -212,6 +219,39 @@ class App(tk.Tk):
     def get_text(self, key):
         """獲取當前語言的文字"""
         return self.translations[self.current_language.get()].get(key, key)
+
+    def _resolve_asr_language(self) -> str:
+        """Resolve ASR language selection to a whisper.cpp language code or 'auto'."""
+        selection = (self.asr_lang.get() or "").strip()
+        language_map = {
+            "英文": "en",
+            "繁體中文": "zh",
+            "簡體中文": "zh",
+            "日文": "ja",
+            "韓文": "ko",
+            "法文": "fr",
+            "德文": "de",
+            "西班牙文": "es",
+            "English": "en",
+            "Traditional Chinese": "zh",
+            "Simplified Chinese": "zh",
+            "Japanese": "ja",
+            "Korean": "ko",
+            "French": "fr",
+            "German": "de",
+            "Spanish": "es",
+        }
+        if selection in {"自動偵測", "Auto Detect", "auto", "AUTO"} or not selection:
+            logger.debug("ASR language selection resolved to auto: %s", selection or "(empty)")
+            return "auto"
+
+        resolved = language_map.get(selection)
+        if not resolved:
+            logger.warning("Unrecognized ASR language selection: %s; falling back to auto", selection)
+            return "auto"
+
+        logger.debug("ASR language selection resolved: %s -> %s", selection, resolved)
+        return resolved
 
     def switch_language(self):
         """切換語言"""
@@ -258,6 +298,10 @@ class App(tk.Tk):
             self.asr_lang_label.config(text=self.get_text("asr_language_label"))
         if hasattr(self, "output_format_label"):
             self.output_format_label.config(text=self.get_text("output_format"))
+        if hasattr(self, "open_output_button"):
+            self.open_output_button.config(text=self.get_text("open_output_folder"))
+        if hasattr(self, "output_to_source_check"):
+            self.output_to_source_check.config(text=self.get_text("output_to_source"))
 
         if hasattr(self, "asr_lang"):
             self.asr_lang['values'] = self.translations[self.current_language.get()]["asr_language_options"]
@@ -279,6 +323,9 @@ class App(tk.Tk):
 
         content_frame = ttk.Frame(self)
         content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        content_frame.columnconfigure(0, weight=1, uniform="columns")
+        content_frame.columnconfigure(1, weight=1, uniform="columns")
+        content_frame.rowconfigure(0, weight=1)
         self._create_single_page(content_frame)
 
         # 進度條框架（標籤頁外）
@@ -294,11 +341,20 @@ class App(tk.Tk):
         status_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
 
         # 狀態標籤
-        self.status_label = ttk.Label(status_frame, text="", wraplength=550, justify="center")
+        self.status_label = ttk.Label(status_frame, text="", wraplength=900, justify="center")
         self.status_label.pack(fill=tk.BOTH, expand=True)
 
     def _create_single_page(self, parent):
-        sources_frame = ttk.LabelFrame(parent, text=self.get_text("sources_section"))
+        left_frame = ttk.Frame(parent)
+        left_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        left_frame.columnconfigure(0, weight=1)
+        left_frame.rowconfigure(1, weight=1)
+
+        right_frame = ttk.Frame(parent)
+        right_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        right_frame.columnconfigure(0, weight=1)
+
+        sources_frame = ttk.LabelFrame(left_frame, text=self.get_text("sources_section"))
         sources_frame.pack(fill=tk.X, padx=10, pady=5)
 
         url_frame = ttk.Frame(sources_frame)
@@ -327,7 +383,7 @@ class App(tk.Tk):
         )
         self.select_audio_button.pack(side=tk.LEFT, padx=5)
 
-        queue_frame = ttk.LabelFrame(parent, text=self.get_text("queue_section"))
+        queue_frame = ttk.LabelFrame(left_frame, text=self.get_text("queue_section"))
         queue_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
         self.queue_list = tk.Listbox(queue_frame, width=70, height=6, selectmode=tk.SINGLE)
@@ -343,12 +399,12 @@ class App(tk.Tk):
         )
         self.clear_queue_button.pack(side=tk.LEFT, padx=5)
 
-        asr_frame = ttk.LabelFrame(parent, text=self.get_text("asr_section"))
+        asr_frame = ttk.LabelFrame(right_frame, text=self.get_text("asr_section"))
         asr_frame.pack(fill=tk.X, padx=10, pady=5)
 
         self._create_asr_settings(asr_frame)
 
-        translation_frame = ttk.LabelFrame(parent, text=self.get_text("translation_section"))
+        translation_frame = ttk.LabelFrame(right_frame, text=self.get_text("translation_section"))
         translation_frame.pack(fill=tk.X, padx=10, pady=5)
 
         self.enable_translation_var = tk.BooleanVar(value=False)
@@ -364,12 +420,12 @@ class App(tk.Tk):
         self.translation_options_frame.pack(fill=tk.X, padx=10, pady=5)
         self._create_translation_settings(self.translation_options_frame)
 
-        output_frame = ttk.LabelFrame(parent, text=self.get_text("output_section"))
+        output_frame = ttk.LabelFrame(right_frame, text=self.get_text("output_section"))
         output_frame.pack(fill=tk.X, padx=10, pady=5)
 
         self._create_output_settings(output_frame)
 
-        control_frame = ttk.Frame(parent)
+        control_frame = ttk.Frame(right_frame)
         control_frame.pack(fill=tk.X, padx=10, pady=5)
 
         self.start_queue_button = ttk.Button(
@@ -400,7 +456,7 @@ class App(tk.Tk):
 
         self.asr_model_path = ttk.Entry(model_path_frame)
         self.asr_model_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.asr_model_path.insert(0, "whisper.cpp/models/for-tests-ggml-base.bin")
+        self.asr_model_path.insert(0, "whisper.cpp/models/ggml-base.bin")
 
         self.browse_model_button = ttk.Button(
             model_path_frame,
@@ -524,6 +580,23 @@ class App(tk.Tk):
             command=self.browse_output_dir
         )
         self.browse_output_button.pack(side=tk.LEFT, padx=5)
+
+        self.open_output_button = ttk.Button(
+            output_path_frame,
+            text=self.get_text("open_output_folder"),
+            command=self.open_output_dir,
+        )
+        self.open_output_button.pack(side=tk.LEFT, padx=5)
+
+        output_option_frame = ttk.Frame(parent)
+        output_option_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.output_to_source_check = ttk.Checkbutton(
+            output_option_frame,
+            text=self.get_text("output_to_source"),
+            variable=self.output_to_source_var,
+        )
+        self.output_to_source_check.pack(side=tk.LEFT, padx=5)
 
     def toggle_translation_options(self):
         state = "normal" if self.enable_translation_var.get() else "disabled"
@@ -717,7 +790,7 @@ class App(tk.Tk):
 
         self.asr_model_path = ttk.Entry(model_path_frame)
         self.asr_model_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.asr_model_path.insert(0, "whisper.cpp/models/for-tests-ggml-base.bin")
+        self.asr_model_path.insert(0, "whisper.cpp/models/ggml-base.bin")
 
         # 模型選擇按鈕
         self.browse_model_button = ttk.Button(
@@ -827,11 +900,16 @@ class App(tk.Tk):
     def add_urls_to_queue(self):
         logger.debug("Add URLs to queue requested")
         urls = self.url_text.get("1.0", tk.END)
-        for line in _parse_urls(urls):
+        url_list = _parse_urls(urls)
+        logger.debug("Parsed URLs count=%s", len(url_list))
+        for line in url_list:
             item = {"kind": "url", "value": line}
-            self.queue_items.append(item)
+            with self.queue_items_lock:
+                self.queue_items.append(item)
             self.queue_list.insert(tk.END, _queue_item_label(item))
+            logger.debug("URL added to queue: %s", line)
         self.url_text.delete("1.0", tk.END)
+        logger.info("URLs added to queue count=%s", len(url_list))
 
     def select_audio_files(self):
         file_paths = filedialog.askopenfilenames(
@@ -842,30 +920,39 @@ class App(tk.Tk):
             ]
         )
         if not file_paths:
+            logger.debug("Audio file selection cancelled")
             return
         for path in file_paths:
             item = {"kind": "file", "value": path}
-            self.queue_items.append(item)
+            with self.queue_items_lock:
+                self.queue_items.append(item)
             self.queue_list.insert(tk.END, _queue_item_label(item))
+            logger.debug("Audio file added to queue: %s", path)
         logger.debug("Audio files selected count=%s", len(file_paths))
 
     def clear_queue(self):
         self.queue_list.delete(0, tk.END)
-        self.queue_items = []
+        with self.queue_items_lock:
+            self.queue_items = []
         self.queue_total = 0
         logger.debug("Queue cleared")
 
     def start_queue(self):
         logger.info("Start queue requested")
         if self.is_running:
+            logger.warning("Queue already running, ignoring start request")
             return
         if self.url_text.get("1.0", tk.END).strip():
+            logger.debug("Adding pending URLs before starting queue")
             self.add_urls_to_queue()
-        if not self.queue_items:
-            messagebox.showwarning("提示", "請先加入待處理項目")
-            return
+        with self.queue_items_lock:
+            if not self.queue_items:
+                logger.warning("Queue is empty, cannot start")
+                messagebox.showwarning("提示", "請先加入待處理項目")
+                return
+            self.queue_total = len(self.queue_items)
+        logger.info("Starting queue processing total_items=%s", self.queue_total)
         self.is_running = True
-        self.queue_total = len(self.queue_items)
         self._process_next_queue_item()
 
     def stop_queue(self):
@@ -877,41 +964,78 @@ class App(tk.Tk):
         if directory:
             self.asr_output_path.delete(0, tk.END)
             self.asr_output_path.insert(0, directory)
+
+    def open_output_dir(self):
+        output_dir = (self.asr_output_path.get() or "").strip() or "transcriptions"
+        output_dir = os.path.abspath(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+
+        try:
+            if sys.platform.startswith("darwin"):
+                subprocess.run(["open", output_dir], check=False)
+            elif os.name == "nt":
+                os.startfile(output_dir)  # type: ignore[attr-defined]
+            else:
+                subprocess.run(["xdg-open", output_dir], check=False)
+            logger.debug("Opened output directory: %s", output_dir)
+        except Exception as exc:
+            logger.warning("Failed to open output directory: %s error=%s", output_dir, exc)
+            messagebox.showerror(self.get_text("error"), f"無法開啟資料夾：{output_dir}")
             logger.debug("Output directory selected: %s", directory)
 
     def _process_next_queue_item(self):
         if not self.is_running:
+            logger.debug("Queue processing stopped by user")
             return
-        item = _pop_next_queue_item(self.queue_items)
-        if item is None:
-            self.is_running = False
-            self.status_label.config(text="佇列完成")
-            return
-        current_index = self.queue_total - len(self.queue_items)
+        with self.queue_items_lock:
+            item = _pop_next_queue_item(self.queue_items)
+            if item is None:
+                self.is_running = False
+                self.status_label.config(text="佇列完成")
+                logger.info("Queue processing completed")
+                return
+            current_index = self.queue_total - len(self.queue_items)
+            remaining = len(self.queue_items)
+        logger.debug("Processing queue item index=%s/%s remaining=%s kind=%s",
+                     current_index, self.queue_total, remaining, item.get("kind"))
         self.status_label.config(text=_queue_status_text(current_index, self.queue_total, "處理中"))
         self._run_queue_item(item, current_index)
 
     def _run_queue_item(self, item, index):
         def _run():
             try:
+                logger.debug("Queue item execution started index=%s kind=%s", index, item["kind"])
                 if item["kind"] == "url":
+                    logger.info("Downloading audio from URL: %s", item["value"])
                     from src.asr.audio_downloader import AudioDownloader
                     downloader = AudioDownloader(output_dir="downloads")
                     audio_path = downloader.download_audio_to_wav(item["value"])
+                    logger.info("Audio downloaded successfully: %s", audio_path)
                 else:
                     audio_path = item["value"]
+                    logger.debug("Using local audio file: %s", audio_path)
 
                 if not audio_path or not os.path.exists(audio_path):
+                    logger.error("Audio file not found: %s", audio_path)
                     raise FileNotFoundError(f"音訊檔案不存在：{audio_path}")
 
-                output_path = self._resolve_asr_output_path(audio_path)
+                prefer_source_dir = item.get("kind") == "file"
+                output_path = self._resolve_asr_output_path(audio_path, prefer_source_dir=prefer_source_dir)
+                logger.debug("ASR output path resolved: %s", output_path)
                 self._run_asr_request(audio_path, output_path)
+                logger.info("ASR completed for index=%s output=%s", index, output_path)
+
                 if _should_translate(self.enable_translation_var.get()):
+                    logger.debug("Translation enabled, starting translation for: %s", output_path)
                     self._run_translation_for_output(output_path, index)
+                else:
+                    logger.debug("Translation disabled, skipping")
+
                 self.after(0, lambda: self._on_queue_item_done(index, True, output_path))
             except Exception as exc:
                 logger.error("Queue item failed index=%s error=%s", index, exc)
-                self.after(0, lambda: self._on_queue_item_done(index, False, str(exc)))
+                error_msg = str(exc)
+                self.after(0, lambda msg=error_msg: self._on_queue_item_done(index, False, msg))
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
@@ -922,27 +1046,7 @@ class App(tk.Tk):
 
         from src.application.asr_coordinator import ASRRequest
 
-        language_map = {
-            "自動偵測": None,
-            "英文": "en",
-            "繁體中文": "zh",
-            "簡體中文": "zh",
-            "日文": "ja",
-            "韓文": "ko",
-            "法文": "fr",
-            "德文": "de",
-            "西班牙文": "es",
-            "Auto Detect": None,
-            "English": "en",
-            "Traditional Chinese": "zh",
-            "Simplified Chinese": "zh",
-            "Japanese": "ja",
-            "Korean": "ko",
-            "French": "fr",
-            "German": "de",
-            "Spanish": "es",
-        }
-        language = language_map.get(self.asr_lang.get(), None)
+        language = self._resolve_asr_language()
 
         request = ASRRequest(
             input_path=audio_path,
@@ -957,8 +1061,13 @@ class App(tk.Tk):
         )
         self.asr_coordinator.run(request)
 
-    def _resolve_asr_output_path(self, audio_path):
+    def _resolve_asr_output_path(self, audio_path, prefer_source_dir: bool = True):
         output_dir = self.asr_output_path.get().strip() or "transcriptions"
+        if self.output_to_source_var.get() and prefer_source_dir and audio_path:
+            source_dir = os.path.dirname(os.path.abspath(audio_path))
+            if source_dir:
+                output_dir = source_dir
+
         os.makedirs(output_dir, exist_ok=True)
         base_name = os.path.splitext(os.path.basename(audio_path))[0]
         ext = self.output_format.get()
@@ -988,7 +1097,7 @@ class App(tk.Tk):
         )
         thread.set_app(self)
         thread.start()
-        thread.join()
+        # Don't join() - it blocks the UI thread. The thread will call back via file_translated()
 
     def _on_queue_item_done(self, index, success, message):
         if success:
@@ -1013,7 +1122,6 @@ class App(tk.Tk):
         )
         if file_path:
             self.audio_path_label.config(text=f"選擇的檔案：{file_path}")
-            self.audio_path_label.cget("from")
             logger.debug("Audio file selected: %s", file_path)
 
     def browse_model(self):
@@ -1096,18 +1204,7 @@ class App(tk.Tk):
         # 獲取設定
         use_gpu = self.use_gpu_var.get()
         gpu_backend = self.gpu_backend.get()
-        language_map = {
-            "自動偵測": None,
-            "英文": "en",
-            "繁體中文": "zh",
-            "簡體中文": "zh",
-            "日文": "ja",
-            "韓文": "ko",
-            "法文": "fr",
-            "德文": "de",
-            "西班牙文": "es",
-        }
-        language = language_map.get(self.asr_lang.get(), None)
+        language = self._resolve_asr_language()
         output_format = self.output_format.get()
         output_path = self.asr_output_path.get()
 
@@ -1161,37 +1258,40 @@ class App(tk.Tk):
         skipped_count = 0
         backup_count = 0
 
+        # Build set of existing paths for O(1) lookup
+        existing_paths = set()
+        for i in range(self.file_list.size()):
+            existing_paths.add(self.file_list.get(i))
+
         # 遍歷文件夾中的所有檔案
         for root, dirs, files in os.walk(folder_path):
             # 跳過 backup 目錄
             if 'backup' in dirs:
                 dirs.remove('backup')  # 這會讓 os.walk 跳過 backup 目錄
-            
+
             # 檢查當前目錄是否為 backup 目錄
             if os.path.basename(root) == 'backup':
                 backup_count += len([f for f in files if f.lower().endswith('.srt')])
                 continue
-                
+
             for file in files:
                 if file.lower().endswith('.srt'):
                     # 跳過中文翻譯檔案
                     if file.lower().endswith('.zh_tw.srt'):
                         skipped_count += 1
                         continue
-                    
+
                     full_path = os.path.join(root, file)
-                    
-                    # 檢查是否已在列表中
-                    already_exists = False
-                    for i in range(self.file_list.size()):
-                        if self.file_list.get(i) == full_path:
-                            already_exists = True
-                            skipped_count += 1
-                            break
-                    
-                    if not already_exists:
+
+                    # 檢查是否已在列表中 (O(1) lookup)
+                    if full_path in existing_paths:
+                        skipped_count += 1
+                        logger.debug("File already in list, skipping: %s", full_path)
+                    else:
                         self.file_list.insert(tk.END, full_path)
+                        existing_paths.add(full_path)
                         added_count += 1
+                        logger.debug("File added to list: %s", full_path)
 
         # 顯示結果
         message = f"已添加 {added_count} 個 SRT 檔案"
@@ -1465,13 +1565,30 @@ class App(tk.Tk):
         if "翻譯完成" in message:
             # 從檔案列表中移除已翻譯的檔案
             if self.auto_clean_workspace_var.get():
-                for i in range(self.file_list.size()):
-                    if os.path.basename(self.file_list.get(i)) in message:
-                        self.file_list.delete(i)
-                        break
-            
+                logger.debug("Auto-cleanup enabled, processing completed file")
+                # Extract the output path from message format: "翻譯完成 | 檔案已成功保存為: {path}"
+                if "檔案已成功保存為:" in message:
+                    completed_path = message.split("檔案已成功保存為:")[-1].strip()
+                    completed_basename = os.path.basename(completed_path)
+                    logger.debug("Extracted completed file basename=%s", completed_basename)
+
+                    for i in range(self.file_list.size()):
+                        file_basename = os.path.basename(self.file_list.get(i))
+                        # Exact match to avoid false positives (e.g., "test.srt" vs "contest.srt")
+                        if file_basename == completed_basename:
+                            logger.info("Removing completed file from list index=%s basename=%s", i, file_basename)
+                            self.file_list.delete(i)
+                            break
+                    else:
+                        logger.warning("Completed file not found in list basename=%s", completed_basename)
+                else:
+                    logger.warning("Cannot extract output path from message: %s", message)
+            else:
+                logger.debug("Auto-cleanup disabled, keeping file in list")
+
             # 如果檔案列表為空且啟用了自動清理，顯示完成訊息
             if self.file_list.size() == 0 and self.auto_clean_workspace_var.get():
+                logger.info("All files processed, workspace cleaned")
                 self.status_label.config(text=self.get_text("workspace_cleaned"))
                 self.progress_bar['value'] = 0
                 messagebox.showinfo(

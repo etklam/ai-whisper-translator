@@ -114,7 +114,7 @@ Default mode stays at `INFO` log level.
 
 1. Switch to the **ASR (Audio Transcription)** tab.
 2. Click `Select Audio File` and choose your audio file, OR enter a YouTube URL and click `Download from YouTube`.
-3. Select Whisper model path (default: `whisper.cpp/models/for-tests-ggml-base.bin`).
+3. Select Whisper model path (default: `whisper.cpp/models/ggml-base.bin`).
 4. Enable `Use GPU Acceleration` and select GPU backend (e.g., `metal` for macOS).
 5. Choose transcription language and output format (SRT recommended).
 6. Click `Start Transcription`.

@@ -90,6 +90,7 @@ class AudioConverter:
                 sf.write(output_path, audio, WHISPER_SAMPLE_RATE, subtype="FLOAT")
 
             self.logger.debug("Audio conversion complete")
+            self._log_audio_stats(audio, WHISPER_SAMPLE_RATE, source="soundfile")
             return audio, WHISPER_SAMPLE_RATE
 
         except Exception as e:
@@ -152,6 +153,7 @@ class AudioConverter:
                 audio = np.mean(audio, axis=1)
 
             self.logger.debug(f"ffmpeg conversion complete: {len(audio)} samples at {sr} Hz")
+            self._log_audio_stats(audio, sr, source="ffmpeg")
             return audio, sr
 
         except subprocess.CalledProcessError as e:
@@ -191,3 +193,45 @@ class AudioConverter:
         self.logger.debug(f"Resampled from {len(audio)} to {len(resampled)} samples")
         return resampled
 
+    def _log_audio_stats(self, audio: np.ndarray, sr: int, source: str) -> None:
+        """Log basic audio statistics to help diagnose silent/invalid input."""
+        try:
+            if audio.size == 0:
+                self.logger.warning("Audio stats: empty audio source=%s sr=%s", source, sr)
+                return
+
+            finite_mask = np.isfinite(audio)
+            if not np.all(finite_mask):
+                invalid_count = int(np.size(audio) - np.count_nonzero(finite_mask))
+                self.logger.warning("Audio stats: non-finite values detected count=%s source=%s", invalid_count, source)
+
+            audio_min = float(np.min(audio))
+            audio_max = float(np.max(audio))
+            audio_mean = float(np.mean(audio))
+            audio_rms = float(np.sqrt(np.mean(np.square(audio))))
+            audio_abs_max = float(np.max(np.abs(audio)))
+            zero_ratio = float(np.mean(audio == 0.0))
+
+            self.logger.info(
+                "Audio stats source=%s dtype=%s samples=%s sr=%s min=%.6f max=%.6f mean=%.6f rms=%.6f abs_max=%.6f zero_ratio=%.4f",
+                source,
+                audio.dtype,
+                audio.size,
+                sr,
+                audio_min,
+                audio_max,
+                audio_mean,
+                audio_rms,
+                audio_abs_max,
+                zero_ratio,
+            )
+
+            if audio_abs_max < 1e-4 or audio_rms < 1e-5:
+                self.logger.warning(
+                    "Audio appears nearly silent source=%s rms=%.6f abs_max=%.6f",
+                    source,
+                    audio_rms,
+                    audio_abs_max,
+                )
+        except Exception as exc:
+            self.logger.warning("Audio stats logging failed source=%s error=%s", source, exc)

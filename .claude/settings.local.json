@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree -L 3 -I '__pycache__|*.pyc|.pytest_cache|.venv|whisper.cpp|.git' /Users/klam/Desktop/project/ai-whisper-translator/ 2>/dev/null || find /Users/klam/Desktop/project/ai-whisper-translator -maxdepth 3 -not -path '*/\\\\.*' -not -path '*/__pycache__*' -not -path '*/whisper.cpp/*' -type f | head -60)",
+      "Bash(pytest tests/unit/application/test_translation_coordinator.py -v)",
+      "Bash(PYTHONPATH=/Users/klam/Desktop/project/ai-whisper-translator pytest tests/unit/application/test_translation_coordinator.py -v)",
+      "Bash(python -c \"from src.application.models import ASRSummary; s = ASRSummary\\(total_files=5, successful_files=3, failed_files=2\\); print\\(f'Test passed: {s.total_files=}, {s.successful_files=}, {s.failed_files=}'\\)\")",
+      "Bash(python -m pytest tests/unit/ -v --tb=short)",
+      "Bash(python -m pytest tests/unit/infrastructure/test_ollama_translation_client.py -v)",
+      "Bash(python -m pytest tests/unit/ -v)",
+      "Bash(python -c \"import json; f=open\\('src/translation/prompts.json'\\); data=json.load\\(f\\); print\\('Valid JSON ✓'\\); print\\(f'Token count \\(approx\\): {len\\(data[\\\\\"default_prompt\\\\\"]\\)}'\\)\")",
+      "Bash(python -c \"import json; f=open\\('src/translation/prompts.json'\\); data=json.load\\(f\\); print\\('Valid JSON ✓'\\); print\\(f'Old prompt length: ~1800 chars'\\); print\\(f'New prompt length: {len\\(data[\\\\\"default_prompt\\\\\"]\\)} chars'\\); print\\(f'Token reduction: ~{int\\(\\(1800-len\\(data[\\\\\"default_prompt\\\\\"]\\)\\)/1800*100\\)}%'\\)\")"
+    ]
+  }
+}

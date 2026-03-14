@@ -18,6 +18,8 @@ from src.asr.whisper_wrapper import (
 from src.asr.audio_converter import AudioConverter
 from src.asr.utils.logger import get_logger
 
+logger = get_logger(__name__)
+
 
 class Transcriber:
     """
@@ -62,14 +64,16 @@ class Transcriber:
         self.logger.info(
             f"Loading model from: {self.model_path} (requested_backend={self.requested_gpu_backend})"
         )
+        use_gpu = self.use_gpu
         try:
-            self.ctx = self.wrapper.init_context(str(self.model_path), use_gpu=self.use_gpu)
-            self.runtime_use_gpu = self.use_gpu
+            self.ctx = self.wrapper.init_context(str(self.model_path), use_gpu=use_gpu)
+            self.runtime_use_gpu = use_gpu
         except Exception as e:
-            if self.use_gpu and self.fallback_to_cpu:
+            if use_gpu and self.fallback_to_cpu:
                 self.logger.warning(f"GPU init failed, fallback to CPU: {e}")
-                self.ctx = self.wrapper.init_context(str(self.model_path), use_gpu=False)
-                self.runtime_use_gpu = False
+                use_gpu = False
+                self.ctx = self.wrapper.init_context(str(self.model_path), use_gpu=use_gpu)
+                self.runtime_use_gpu = use_gpu
                 self.used_fallback = True
             else:
                 raise
@@ -105,8 +109,12 @@ class Transcriber:
 
         # Convert audio to whisper format
         self.logger.info(f"Processing audio: {audio_path}")
-        converter = AudioConverter()
-        audio_samples, sr = converter.convert_to_whisper_format(audio_path)
+        try:
+            converter = AudioConverter()
+            audio_samples, sr = converter.convert_to_whisper_format(audio_path)
+        except Exception as exc:
+            self.logger.error(f"Audio conversion failed for {audio_path}: {exc}")
+            raise RuntimeError(f"Failed to convert audio file: {exc}") from exc
 
         self.logger.info(f"Audio info: {len(audio_samples)} samples at {sr} Hz")
         self.logger.info(f"Duration: {len(audio_samples) / sr:.2f} seconds")
@@ -120,6 +128,15 @@ class Transcriber:
             no_timestamps=no_timestamps,
             print_progress=print_progress,
         )
+        self.logger.debug(
+            "Whisper full params: no_speech_thold=%s logprob_thold=%s entropy_thold=%s suppress_blank=%s suppress_nst=%s vad=%s",
+            params.no_speech_thold,
+            params.logprob_thold,
+            params.entropy_thold,
+            params.suppress_blank,
+            params.suppress_nst,
+            params.vad,
+        )
 
         # Convert numpy array to ctypes array
         audio_array = (ctypes.c_float * len(audio_samples))(*audio_samples)
@@ -127,6 +144,7 @@ class Transcriber:
         # Transcribe
         self.logger.info("Transcribing...")
         self.logger.debug(f"Language: {language}, Threads: {n_threads}, Translate: {translate}")
+        self.logger.debug(f"Audio samples: {len(audio_samples)}, Sample rate: {sr}")
         segments = self.wrapper.transcribe(
             self.ctx,
             audio_array,
@@ -138,6 +156,43 @@ class Transcriber:
         detected_lang = self.wrapper.get_detected_language(self.ctx)
         if detected_lang:
             self.logger.info(f"Detected language: {detected_lang}")
+        else:
+            self.logger.warning("No language detected")
+
+        # Retry once with forced language if auto-detect produced no segments
+        if (not segments) and (language is None or str(language).lower() == "auto") and detected_lang:
+            self.logger.warning(
+                "Auto-detect returned 0 segments; retrying with forced language=%s",
+                detected_lang,
+            )
+            retry_params = self.wrapper.get_full_params(
+                strategy=WhisperSamplingStrategy.WHISPER_SAMPLING_GREEDY,
+                language=detected_lang,
+                n_threads=n_threads,
+                translate=translate,
+                no_timestamps=no_timestamps,
+                print_progress=print_progress,
+            )
+            # Be more permissive on no-speech threshold for the retry
+            if retry_params.no_speech_thold > 0.2:
+                retry_params.no_speech_thold = 0.2
+                self.logger.debug(
+                    "Lowered no_speech_thold to %s for auto-detect retry",
+                    retry_params.no_speech_thold,
+                )
+
+            segments = self.wrapper.transcribe(
+                self.ctx,
+                audio_array,
+                len(audio_samples),
+                retry_params,
+            )
+            self.logger.info("Retry transcription completed segments=%s", len(segments))
+
+        # Log segment count
+        self.logger.info(f"Transcription returned {len(segments)} segments")
+        if len(segments) == 0:
+            self.logger.warning("No speech detected in audio. Possible causes: audio too quiet, wrong format, or no speech content")
 
         # Print timings
         self.logger.debug("Performance timings:")
@@ -290,7 +345,18 @@ def save_output(
         language: Detected language code
     """
     logger = get_logger()
-    logger.debug(f"Saving output to: {output_path}, format: {format}")
+    logger.debug("Saving output to: %s, format: %s", output_path, format)
+    logger.info("Output save requested segments=%s format=%s", len(segments), format)
+
+    non_empty_segments = [s for s in segments if getattr(s, "text", "") and s.text.strip()]
+    if segments and not non_empty_segments:
+        logger.warning("All segments are empty/whitespace. segments=%s", len(segments))
+    elif non_empty_segments:
+        preview = " | ".join(
+            (s.text.strip()[:80] + ("..." if len(s.text.strip()) > 80 else ""))
+            for s in non_empty_segments[:3]
+        )
+        logger.debug("Segment preview (first 3 non-empty): %s", preview)
 
     formatter = OutputFormatter()
 
@@ -306,10 +372,20 @@ def save_output(
         logger.error(f"Unknown format: {format}")
         raise ValueError(f"Unknown format: {format}")
 
+    logger.info("Formatted output length=%s chars", len(content))
+    if not content.strip():
+        logger.warning("Formatted output is empty or whitespace. path=%s format=%s", output_path, format)
+
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(content)
 
-    logger.info(f"Output saved to: {output_path}")
+    try:
+        file_size = Path(output_path).stat().st_size
+        logger.info("Output saved to: %s size_bytes=%s", output_path, file_size)
+        if file_size == 0:
+            logger.warning("Output file is empty on disk: %s", output_path)
+    except Exception as exc:
+        logger.warning("Failed to stat output file: %s error=%s", output_path, exc)
 
 
 if __name__ == "__main__":

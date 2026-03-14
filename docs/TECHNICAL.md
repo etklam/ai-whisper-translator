@@ -128,7 +128,7 @@ High-level flow:
 
 ### ASR Configuration
 - Whisper library path: `whisper.cpp/build/src/libwhisper.dylib` (auto-detected)
-- Whisper model path: Configurable in GUI (default: `whisper.cpp/models/for-tests-ggml-base.bin`)
+- Whisper model path: Configurable in GUI (default: `whisper.cpp/models/ggml-base.bin`)
 - GPU backend: Configurable in GUI (options: auto, metal, cuda, hip, vulkan, opencl, cpu)
 - Thread count: Default `4` (in ASRRequest)
 - Output format: Configurable in GUI (options: srt, txt, json, verbose)

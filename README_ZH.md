@@ -52,6 +52,27 @@ ASR 功能已包含：
 - macOS 預先編譯的 libwhisper.dylib
 - 測試用 Whisper 模型
 
+### 安裝 / 建置 whisper.cpp（macOS onboarding）
+
+此腳本會自動下載 `whisper.cpp`、編譯 `libwhisper.dylib`，並下載一個預設模型：
+
+```bash
+chmod +x packaging/macos/onboarding-whisper-cpp.sh
+packaging/macos/onboarding-whisper-cpp.sh
+```
+
+如果你想略過模型下載：
+
+```bash
+packaging/macos/onboarding-whisper-cpp.sh --no-model
+```
+
+若你想啟用 CPU 原生最佳化（可能會較慢或在部分環境卡住）：
+
+```bash
+packaging/macos/onboarding-whisper-cpp.sh --native true
+```
+
 ## 安裝（建議：uv）
 
 ```bash
@@ -114,7 +135,7 @@ $env:APP_DEBUG="1"; uv run python main.py
 
 1. 切換到 **語音轉文字** 標籤頁。
 2. 點 `選擇音訊檔案` 選擇音訊檔案，或輸入 YouTube URL 並點 `從 YouTube 下載`。
-3. 選擇 Whisper 模型路徑（預設：`whisper.cpp/models/for-tests-ggml-base.bin`）。
+3. 選擇 Whisper 模型路徑（預設：`whisper.cpp/models/ggml-base.bin`）。
 4. 啟用 `使用 GPU 加速` 並選擇 GPU 後端（例如 macOS 使用 `metal`）。
 5. 選擇轉錄語言和輸出格式（建議 SRT）。
 6. 按 `開始轉錄`。

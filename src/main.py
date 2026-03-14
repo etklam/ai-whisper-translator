@@ -2,6 +2,7 @@ import os
 import sys
 import tkinter as tk
 import logging
+import subprocess
 
 # 添加當前目錄到 PATH，以便可以導入模組
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,6 +17,27 @@ from src.infrastructure.subtitles.pysrt_subtitle_repository import PysrtSubtitle
 from src.infrastructure.translation.ollama_translation_client import OllamaTranslationClient
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_yt_dlp():
+    """Ensure yt-dlp is installed and up-to-date at startup."""
+    try:
+        # Try to upgrade yt-dlp
+        logger.info("Checking yt-dlp installation...")
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if result.returncode == 0:
+            logger.info("yt-dlp is up-to-date")
+        else:
+            logger.warning("yt-dlp upgrade failed: %s", result.stderr)
+    except subprocess.TimeoutExpired:
+        logger.warning("yt-dlp upgrade timed out")
+    except Exception as e:
+        logger.warning("Failed to ensure yt-dlp: %s", e)
 
 
 def build_default_coordinator():
@@ -38,6 +60,9 @@ def main():
     develop_mode = configure_logging()
     logger.info("Application startup")
     logger.debug("Develop mode=%s", develop_mode)
+
+    # Ensure yt-dlp is installed and up-to-date
+    ensure_yt_dlp()
 
     coordinator = build_default_coordinator()
     asr_coordinator = build_asr_coordinator()

@@ -10,6 +10,9 @@ from typing import Optional, List, Tuple
 from dataclasses import dataclass
 
 from src.asr.utils.constants import WHISPER_SAMPLE_RATE
+from src.asr.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # Enums
@@ -242,11 +245,11 @@ class WhisperWrapper:
 
         self.lib = ctypes.CDLL(library_path)
 
+        # Set up function prototypes before calling into the library.
+        self._setup_functions()
+
         # Check whisper.cpp version for ABI compatibility
         self._check_version()
-
-        # Set up function prototypes
-        self._setup_functions()
 
     def _setup_functions(self):
         """Set up ctypes function prototypes for whisper functions."""
@@ -414,6 +417,17 @@ class WhisperWrapper:
             # Handle None as auto-detect
             params.detect_language = True
             params.language = None
+
+        # Log key parameters for debugging
+        logger.debug(f"Whisper params: threads={params.n_threads}, translate={params.translate}, "
+                    f"no_timestamps={params.no_timestamps}, detect_language={params.detect_language}, "
+                    f"no_speech_thold={params.no_speech_thold}, suppress_blank={params.suppress_blank}")
+
+        # Lower the no_speech_thold to be more sensitive to speech detection
+        # Default is often 0.6, but some audio may need a lower threshold
+        if params.no_speech_thold > 0.5:
+            logger.debug(f"Lowering no_speech_thold from {params.no_speech_thold} to 0.5 for better detection")
+            params.no_speech_thold = 0.5
 
         return params
 

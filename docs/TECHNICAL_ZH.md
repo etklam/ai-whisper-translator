@@ -128,7 +128,7 @@
 
 ### ASR 配置
 - Whisper 函式庫路徑：`whisper.cpp/build/src/libwhisper.dylib`（自動偵測）
-- Whisper 模型路徑：GUI 可設定（預設：`whisper.cpp/models/for-tests-ggml-base.bin`）
+- Whisper 模型路徑：GUI 可設定（預設：`whisper.cpp/models/ggml-base.bin`）
 - GPU 後端：GUI 可設定（選項：auto, metal, cuda, hip, vulkan, opencl, cpu）
 - 執行緒數：預設 `4`（在 ASRRequest 中）
 - 輸出格式：GUI 可設定（選項：srt, txt, json, verbose）
