@@ -3,6 +3,7 @@ import asyncio
 import os
 import logging
 import pysrt
+import re
 from queue import Queue
 
 from src.utils.file_utils import ensure_backup_dir, get_output_path
@@ -103,9 +104,31 @@ class TranslationThread(threading.Thread):
             self.complete_callback(f"已跳過檔案: {self.file_path}")
 
     async def translate_batch_async(self, texts):
+        if isinstance(self.translation_client, OllamaTranslationClient):
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, self.fetch_batch, texts)
         loop = asyncio.get_event_loop()
         tasks = [loop.run_in_executor(None, self.fetch, text) for text in texts]
         return await asyncio.gather(*tasks)
+
+    def fetch_batch(self, texts):
+        try:
+            prompt_text = self._build_tagged_prompt(texts)
+            response = self.translation_client.translate_text(
+                text=prompt_text,
+                source_lang=self.source_lang,
+                target_lang=self.target_lang,
+                model_name=self.model_name,
+                system_prompt=self._get_system_prompt(),
+            )
+            parsed = self._parse_tagged_response(response, len(texts))
+            if parsed is None:
+                logger.warning("Batch translation parse failed; falling back to per-text")
+                return [self.fetch(text) for text in texts]
+            return parsed
+        except ExternalServiceError as exc:
+            logger.warning("Batch subtitle translation failed file=%s error=%s", self.file_path, exc)
+            return [None for _ in texts]
 
     def fetch(self, text):
         try:
@@ -124,6 +147,35 @@ class TranslationThread(threading.Thread):
         prompt = self.prompt_provider.get_prompt(use_alt_prompt=self.use_alt_prompt)
         logger.debug("Resolved system prompt len=%s use_alt_prompt=%s", len(prompt), self.use_alt_prompt)
         return prompt
+
+    def _build_tagged_prompt(self, texts):
+        lines = [
+            "Return translations with the same tags, preserving the tags exactly.",
+            "Do not add, remove, or reorder any tags.",
+            "Each tag must appear exactly once in the output.",
+        ]
+        for idx, text in enumerate(texts, start=1):
+            lines.append(f"<<<S{idx}>>>")
+            lines.append(text)
+        return "\n".join(lines)
+
+    def _parse_tagged_response(self, response, expected_count):
+        if not response:
+            return None
+        tag_pattern = re.compile(r"<<<S(\d+)>>>")
+        matches = list(tag_pattern.finditer(response))
+        if not matches:
+            return None
+        results = [None for _ in range(expected_count)]
+        for i, match in enumerate(matches):
+            start = match.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(response)
+            idx = int(match.group(1)) - 1
+            if 0 <= idx < expected_count:
+                results[idx] = response[start:end].strip()
+        if any(r is None for r in results):
+            return None
+        return results
 
 
     def get_output_path(self):

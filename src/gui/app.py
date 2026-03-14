@@ -18,6 +18,7 @@ print("提示：拖放功能已暫時停用（macOS 兼容性）")
 
 from src.translation.translation_thread import TranslationThread
 from src.infrastructure.translation.libretranslate_client import LibreTranslateClient
+from src.infrastructure.translation.ollama_translation_client import OllamaTranslationClient
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class App(tk.Tk):
                 "source_lang_label": "原文語言:",
                 "target_lang_label": "目標語言:",
                 "translation_engine_label": "翻譯引擎:",
+                "openai_endpoint_label": "OpenAI 端點:",
                 "model_label": "選擇模型:",
                 "parallel_label": "並行請求數:",
                 "auto_clean": "翻譯前自動清理",
@@ -139,6 +141,7 @@ class App(tk.Tk):
                 "source_lang_label": "原文语言:",
                 "target_lang_label": "目标语言:",
                 "translation_engine_label": "翻译引擎:",
+                "openai_endpoint_label": "OpenAI 端点:",
                 "model_label": "选择模型:",
                 "parallel_label": "并行请求数:",
                 "auto_clean": "翻译前自动清理",
@@ -210,6 +213,7 @@ class App(tk.Tk):
                 "source_lang_label": "Source Language:",
                 "target_lang_label": "Target Language:",
                 "translation_engine_label": "Translation Engine:",
+                "openai_endpoint_label": "OpenAI Endpoint:",
                 "model_label": "Select Model:",
                 "parallel_label": "Parallel Requests:",
                 "auto_clean": "Auto Clean Before Translation",
@@ -294,6 +298,7 @@ class App(tk.Tk):
         self.translation_engine_key = "ollama"
         self.translation_engine_var = tk.StringVar(value="")
         self.free_translation_client = LibreTranslateClient()
+        self.ollama_translation_client = OllamaTranslationClient()
         self.config_path = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "..", CONFIG_FILENAME)
         )
@@ -312,6 +317,13 @@ class App(tk.Tk):
     def get_text(self, key):
         """獲取當前語言的文字"""
         return self.translations[self.current_language.get()].get(key, key)
+
+    def _get_openai_endpoint(self) -> str:
+        if hasattr(self, "openai_endpoint"):
+            value = (self.openai_endpoint.get() or "").strip()
+            if value:
+                return value
+        return os.getenv("OPENAI_COMPAT_ENDPOINT") or os.getenv("OLLAMA_ENDPOINT") or ""
 
     def _get_engine_labels(self):
         return self.translations[self.current_language.get()].get("translation_engine_options", [])
@@ -427,6 +439,8 @@ class App(tk.Tk):
             self.source_lang_label.config(text=self.get_text("source_lang_label"))
         if hasattr(self, "translation_engine_label"):
             self.translation_engine_label.config(text=self.get_text("translation_engine_label"))
+        if hasattr(self, "openai_endpoint_label"):
+            self.openai_endpoint_label.config(text=self.get_text("openai_endpoint_label"))
         if hasattr(self, "model_label"):
             self.model_label.config(text=self.get_text("model_label"))
         if hasattr(self, "parallel_label"):
@@ -755,6 +769,14 @@ class App(tk.Tk):
         self.translation_engine_var.set(self._label_for_engine(self.translation_engine_key))
         self.translation_engine.grid(row=0, column=1, padx=5)
         self.translation_engine.bind("<<ComboboxSelected>>", self.on_translation_engine_changed)
+
+        self.openai_endpoint_label = ttk.Label(engine_frame, text=self.get_text("openai_endpoint_label"))
+        self.openai_endpoint_label.grid(row=0, column=2, padx=5)
+        self.openai_endpoint = ttk.Entry(engine_frame, width=36)
+        self.openai_endpoint.grid(row=0, column=3, padx=5, sticky="ew")
+        self.openai_endpoint.insert(0, "")
+        self.openai_endpoint.bind("<FocusOut>", lambda _e: self._save_config())
+        engine_frame.columnconfigure(3, weight=1)
 
         model_frame = ttk.Frame(parent)
         model_frame.pack(pady=5, fill=tk.X)
@@ -1150,6 +1172,7 @@ class App(tk.Tk):
             title="選擇音訊檔案",
             filetypes=[
                 ("Audio files", "*.wav *.mp3 *.m4a *.flac *.ogg *.wma"),
+                ("Video files", "*.mp4 *.mkv *.mov *.avi *.webm *.flv *.m4v *.wmv *.mpeg *.mpg"),
                 ("All files", "*.*")
             ]
         )
@@ -1357,6 +1380,7 @@ class App(tk.Tk):
             title="選擇音訊檔案",
             filetypes=[
                 ("Audio files", "*.wav *.mp3 *.m4a *.flac *.ogg *.wma"),
+                ("Video files", "*.mp4 *.mkv *.mov *.avi *.webm *.flv *.m4v *.wmv *.mpeg *.mpg"),
                 ("All files", "*.*")
             ]
         )

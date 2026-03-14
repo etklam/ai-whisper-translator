@@ -3,6 +3,7 @@ import os
 import shutil
 import threading
 from dataclasses import dataclass
+import re
 
 import pysrt
 
@@ -76,51 +77,66 @@ class TranslationCoordinator:
                     request.parallel_requests,
                 )
 
-                for sub_index, sub in enumerate(subs, start=1):
+                batch_size = max(1, int(request.parallel_requests))
+                batch_size = min(batch_size, 10)
+                for start in range(0, len(subs), batch_size):
+                    batch = subs[start:start + batch_size]
+                    texts = [sub.text for sub in batch]
                     for attempt in range(request.max_retries + 1):
                         try:
                             logger.debug(
-                                "Translate subtitle file=%s index=%s/%s attempt=%s",
+                                "Translate batch file=%s start=%s size=%s attempt=%s",
                                 file_path,
-                                sub_index,
-                                len(subs),
+                                start,
+                                len(batch),
                                 attempt + 1,
                             )
-                            translated = self.translation_client.translate_text(
-                                text=sub.text,
+                            translated_batch = self._translate_batch(
+                                texts=texts,
                                 source_lang=request.source_lang,
                                 target_lang=request.target_lang,
                                 model_name=request.model_name,
                                 system_prompt=system_prompt,
                             )
-                            sub.text = translated
+                            if translated_batch is None:
+                                translated_batch = [
+                                    self.translation_client.translate_text(
+                                        text=single,
+                                        source_lang=request.source_lang,
+                                        target_lang=request.target_lang,
+                                        model_name=request.model_name,
+                                        system_prompt=system_prompt,
+                                    )
+                                    for single in texts
+                                ]
+                            for sub, translated in zip(batch, translated_batch):
+                                sub.text = translated
                             break
                         except ExternalServiceError as exc:
                             logger.warning(
-                                "External service error file=%s index=%s attempt=%s/%s error=%s",
+                                "External service error file=%s batch_start=%s attempt=%s/%s error=%s",
                                 file_path,
-                                sub_index,
+                                start,
                                 attempt + 1,
                                 request.max_retries + 1,
                                 exc,
                             )
                             if attempt == request.max_retries:
                                 file_failed = True
-                                logger.error("Subtitle translation failed after all retries file=%s index=%s", file_path, sub_index)
+                                logger.error("Batch translation failed after all retries file=%s start=%s", file_path, start)
                                 break
                         except Exception as exc:
                             file_failed = True
                             logger.exception(
-                                "Unexpected translation failure file=%s index=%s error=%s",
+                                "Unexpected translation failure file=%s batch_start=%s error=%s",
                                 file_path,
-                                sub_index,
+                                start,
                                 exc,
                             )
                             break
 
-                    # Stop processing remaining subtitles if one failed
                     if file_failed:
-                        logger.warning("Stopping translation for file=%s due to subtitle failure", file_path)
+                        logger.warning("Stopping translation for file=%s due to batch failure", file_path)
                         break
 
                 # Only save if all subtitles were successfully translated
@@ -171,6 +187,61 @@ class TranslationCoordinator:
             summary.failed_files,
         )
         return summary
+
+    def _translate_batch(self, texts, source_lang, target_lang, model_name, system_prompt):
+        if len(texts) == 1:
+            translated = self.translation_client.translate_text(
+                text=texts[0],
+                source_lang=source_lang,
+                target_lang=target_lang,
+                model_name=model_name,
+                system_prompt=system_prompt,
+            )
+            return [translated]
+
+        prompt_text = self._build_tagged_prompt(texts)
+        response = self.translation_client.translate_text(
+            text=prompt_text,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            model_name=model_name,
+            system_prompt=system_prompt,
+        )
+        parsed = self._parse_tagged_response(response, len(texts))
+        if parsed is None:
+            return None
+        return parsed
+
+    @staticmethod
+    def _build_tagged_prompt(texts):
+        lines = [
+            "Return translations with the same tags, preserving the tags exactly.",
+            "Do not add, remove, or reorder any tags.",
+            "Each tag must appear exactly once in the output.",
+        ]
+        for idx, text in enumerate(texts, start=1):
+            lines.append(f"<<<S{idx}>>>")
+            lines.append(text)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _parse_tagged_response(response, expected_count):
+        if not response:
+            return None
+        tag_pattern = re.compile(r"<<<S(\d+)>>>")
+        matches = list(tag_pattern.finditer(response))
+        if not matches:
+            return None
+        results = [None for _ in range(expected_count)]
+        for i, match in enumerate(matches):
+            start = match.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(response)
+            idx = int(match.group(1)) - 1
+            if 0 <= idx < expected_count:
+                results[idx] = response[start:end].strip()
+        if any(r is None for r in results):
+            return None
+        return results
 
     def run_async(self, request, callback=None):
         def _run():
