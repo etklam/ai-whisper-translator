@@ -45,7 +45,7 @@ def build_default_coordinator():
     logger.debug("Building default coordinator with prompt_path=%s", prompt_path)
     return TranslationCoordinator(
         subtitle_repo=PysrtSubtitleRepository(),
-        translation_client=OllamaTranslationClient("http://localhost:11434/v1/chat/completions"),
+        translation_client=OllamaTranslationClient(),
         prompt_provider=JsonPromptProvider(prompt_path),
         event_sink=None,
     )

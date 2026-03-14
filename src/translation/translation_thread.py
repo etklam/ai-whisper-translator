@@ -111,6 +111,7 @@ class TranslationThread(threading.Thread):
         try:
             return self.translation_client.translate_text(
                 text=text,
+                source_lang=self.source_lang,
                 target_lang=self.target_lang,
                 model_name=self.model_name,
                 system_prompt=self._get_system_prompt(),

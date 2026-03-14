@@ -88,6 +88,7 @@ class TranslationCoordinator:
                             )
                             translated = self.translation_client.translate_text(
                                 text=sub.text,
+                                source_lang=request.source_lang,
                                 target_lang=request.target_lang,
                                 model_name=request.model_name,
                                 system_prompt=system_prompt,

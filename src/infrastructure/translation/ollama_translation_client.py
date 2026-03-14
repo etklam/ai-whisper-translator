@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import urllib.request
 import urllib.error
 
@@ -9,11 +10,36 @@ logger = logging.getLogger(__name__)
 
 
 class OllamaTranslationClient:
-    def __init__(self, endpoint: str):
-        self.endpoint = endpoint
-        logger.debug("OllamaTranslationClient initialized endpoint=%s", endpoint)
+    def __init__(self, endpoint: str | None = None, api_key: str | None = None, timeout: int = 30):
+        self.endpoint = self._normalize_endpoint(
+            endpoint
+            or os.getenv("OPENAI_COMPAT_ENDPOINT")
+            or os.getenv("OLLAMA_ENDPOINT")
+            or "http://localhost:11434/v1/chat/completions"
+        )
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("OLLAMA_API_KEY", "")
+        self.timeout = timeout
+        logger.debug("OllamaTranslationClient initialized endpoint=%s timeout=%s", self.endpoint, self.timeout)
 
-    def translate_text(self, text: str, target_lang: str, model_name: str, system_prompt: str) -> str:
+    @staticmethod
+    def _normalize_endpoint(endpoint: str) -> str:
+        endpoint = endpoint.rstrip("/")
+        if endpoint.endswith("/v1/chat/completions"):
+            return endpoint
+        if endpoint.endswith("/v1"):
+            return f"{endpoint}/chat/completions"
+        if endpoint.endswith("/chat/completions"):
+            return endpoint
+        return f"{endpoint}/v1/chat/completions"
+
+    def translate_text(
+        self,
+        text: str,
+        target_lang: str,
+        model_name: str,
+        system_prompt: str,
+        source_lang: str | None = None,
+    ) -> str:
         logger.debug(
             "Sending translation request endpoint=%s model=%s target_lang=%s text_len=%s prompt_len=%s",
             self.endpoint,
@@ -32,14 +58,17 @@ class OllamaTranslationClient:
             "temperature": 0.1,
         }
         logger.debug("Request payload: model=%s messages_count=%s", model_name, len(payload["messages"]))
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         req = urllib.request.Request(
             self.endpoint,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         try:
             logger.debug("Sending HTTP request to Ollama...")
-            with urllib.request.urlopen(req, timeout=30) as response:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 logger.debug("Ollama response received")
                 result = json.loads(response.read().decode("utf-8"))
                 content = result["choices"][0]["message"]["content"].strip()

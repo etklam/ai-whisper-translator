@@ -36,6 +36,7 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+.config
 
 # ASR outputs
 transcriptions/
