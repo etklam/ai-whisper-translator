@@ -84,7 +84,7 @@ class App(tk.Tk):
                 "error_message": "移除檔案時發生錯誤：{}",
                 "source_lang_options": ["日文", "英文", "韓文", "法文", "德文", "西班牙文", "義大利文", "葡萄牙文", "俄文", "阿拉伯文", "印地文", "印尼文", "越南文", "泰文", "馬來文", "自動偵測"],
                 "target_lang_options": ["繁體中文", "英文", "日文", "韓文", "法文", "德文", "西班牙文", "義大利文", "葡萄牙文", "俄文", "阿拉伯文", "印地文", "印尼文", "越南文", "泰文", "馬來文"],
-                "switch_language": "Switch to English",
+                "switch_language": "切換語言",
                 "file_conflict_title": "檔案已存在",
                 "file_conflict_message": "檔案 {} 已存在。\n請選擇處理方式：\n\n'覆蓋' = 覆蓋現有檔案\n'重新命名' = 自動重新命名\n'跳過' = 跳過此檔案",
                 "overwrite": "覆蓋",
@@ -123,6 +123,74 @@ class App(tk.Tk):
                 "asr_not_available": "ASR 功能不可用",
                 "asr_not_available_msg": "Whisper transcriber not available. Please install whisper.cpp library and set up the model path.",
             },
+            "zh_cn": {
+                "window_title": "AI 语音转译器",
+                "select_files": "选择 SRT 文件",
+                "select_folder": "文件夹批量新增",
+                "source_lang_label": "原文语言:",
+                "target_lang_label": "目标语言:",
+                "model_label": "选择模型:",
+                "parallel_label": "并行请求数:",
+                "auto_clean": "翻译前自动清理",
+                "debug_mode": "调试模式",
+                "clean_workspace": "翻译后清理工作区",
+                "replace_original": "替换原始文件",
+                "start_translation": "开始翻译",
+                "file_removed": "已从工作区移除选中的文件",
+                "no_files": "警告",
+                "no_files_message": "请先选择要翻译的 SRT 文件",
+                "confirm": "确认",
+                "replace_warning": "您选择了替换原始文件模式。\n这将会直接覆盖原始的 SRT 文件。\n原始文件将会备份到 backup 文件夹。\n是否确定要继续？",
+                "cleaning": "正在清理文件...",
+                "cleaning_progress": "正在清理文件 {}/{} ({:.1f}%)\n已清理 {}/{} 句字幕",
+                "cleaning_complete": "清理完成！共清理 {}/{} 句字幕\n开始翻译...",
+                "translating": "正在翻译 {} 个文件...",
+                "translation_progress": "正在翻译第 {}/{} 句字幕 ({}%)",
+                "all_complete": "所有文件翻译完成！",
+                "workspace_cleaned": "所有文件翻译完成！工作区已清理。",
+                "error": "错误",
+                "error_message": "移除文件时发生错误：{}",
+                "source_lang_options": ["日文", "英文", "韩文", "法文", "德文", "西班牙文", "意大利文", "葡萄牙文", "俄文", "阿拉伯文", "印地文", "印尼文", "越南文", "泰文", "马来文", "自动检测"],
+                "target_lang_options": ["简体中文", "英文", "日文", "韩文", "法文", "德文", "西班牙文", "意大利文", "葡萄牙文", "俄文", "阿拉伯文", "印地文", "印尼文", "越南文", "泰文", "马来文"],
+                "switch_language": "切换语言",
+                "file_conflict_title": "文件已存在",
+                "file_conflict_message": "文件 {} 已存在。\n请选择处理方式：\n\n'覆盖' = 覆盖现有文件\n'重新命名' = 自动重新命名\n'跳过' = 跳过此文件",
+                "overwrite": "覆盖",
+                "rename": "重新命名",
+                "skip": "跳过",
+                "auto_rename_countdown": "{} 秒后自动重新命名",
+                # ASR translatons
+                "asr_tab": "语音转文字",
+                "translate_tab": "字幕翻译",
+                "select_audio": "选择音频文件",
+                "youtube_url": "YouTube URL:",
+                "sources_section": "来源",
+                "youtube_urls": "YouTube URLs (一行一个):",
+                "select_audio_files": "选择音频文件（可多选）",
+                "queue_section": "处理队列",
+                "add_urls_to_queue": "加入 URL 到队列",
+                "clear_queue": "清空队列",
+                "start_queue": "开始处理",
+                "stop_queue": "停止",
+                "asr_section": "ASR 设置",
+                "translation_section": "翻译（可选）",
+                "enable_translation": "启用翻译",
+                "output_section": "输出设置",
+                "download_from_youtube": "从 YouTube 下载",
+                "whisper_model_label": "Whisper 模型:",
+                "gpu_backend": "GPU 后端:",
+                "gpu_backend_options": ["auto", "metal", "cuda", "hip", "vulkan", "opencl", "cpu"],
+                "use_gpu": "使用 GPU 加速",
+                "asr_language_label": "转录语言:",
+                "asr_language_options": ["自动检测", "英文", "繁体中文", "简体中文", "日文", "韩文", "法文", "德文", "西班牙文"],
+                "output_format": "输出格式:",
+                "output_format_options": ["srt", "txt", "json", "verbose"],
+                "output_to_source": "输出到原位置（如有）",
+                "open_output_folder": "打开输出文件夹",
+                "start_asr": "开始转录",
+                "asr_not_available": "ASR 功能不可用",
+                "asr_not_available_msg": "Whisper transcriber not available. Please install whisper.cpp library and set up the model path.",
+            },
             "en": {
                 "window_title": "ai-whisper-translator",
                 "select_files": "Select SRT Files",
@@ -152,7 +220,7 @@ class App(tk.Tk):
                 "error_message": "Error removing file: {}",
                 "source_lang_options": ["Japanese", "English", "Korean", "French", "German", "Spanish", "Italian", "Portuguese", "Russian", "Arabic", "Hindi", "Indonesian", "Vietnamese", "Thai", "Malay", "Auto Detect"],
                 "target_lang_options": ["Traditional Chinese", "English", "Japanese", "Korean", "French", "German", "Spanish", "Italian", "Portuguese", "Russian", "Arabic", "Hindi", "Indonesian", "Vietnamese", "Thai", "Malay"],
-                "switch_language": "切換至中文",
+                "switch_language": "Switch Language",
                 "file_conflict_title": "File Exists",
                 "file_conflict_message": "File {} already exists.\nPlease choose an action:\n\n'Overwrite' = Replace existing file\n'Rename' = Auto rename\n'Skip' = Skip this file",
                 "overwrite": "Overwrite",
@@ -232,6 +300,13 @@ class App(tk.Tk):
             "法文": "fr",
             "德文": "de",
             "西班牙文": "es",
+            "繁体中文": "zh",
+            "简体中文": "zh",
+            "日文": "ja",
+            "韩文": "ko",
+            "法文": "fr",
+            "德文": "de",
+            "西班牙文": "es",
             "English": "en",
             "Traditional Chinese": "zh",
             "Simplified Chinese": "zh",
@@ -241,7 +316,7 @@ class App(tk.Tk):
             "German": "de",
             "Spanish": "es",
         }
-        if selection in {"自動偵測", "Auto Detect", "auto", "AUTO"} or not selection:
+        if selection in {"自動偵測", "自动检测", "Auto Detect", "auto", "AUTO"} or not selection:
             logger.debug("ASR language selection resolved to auto: %s", selection or "(empty)")
             return "auto"
 
@@ -256,7 +331,12 @@ class App(tk.Tk):
     def switch_language(self):
         """切換語言"""
         current = self.current_language.get()
-        new_language = "en" if current == "zh_tw" else "zh_tw"
+        if current == "zh_tw":
+            new_language = "zh_cn"
+        elif current == "zh_cn":
+            new_language = "en"
+        else:
+            new_language = "zh_tw"
         self.current_language.set(new_language)
         logger.debug("UI language switched from=%s to=%s", current, new_language)
         self.update_ui_language()
@@ -305,8 +385,12 @@ class App(tk.Tk):
 
         if hasattr(self, "asr_lang"):
             self.asr_lang['values'] = self.translations[self.current_language.get()]["asr_language_options"]
+            if self.asr_lang.get() not in self.asr_lang['values']:
+                self.asr_lang.set(self.asr_lang['values'][0])
         if hasattr(self, "target_lang"):
             self.target_lang['values'] = self.translations[self.current_language.get()]["target_lang_options"]
+            if self.target_lang.get() not in self.target_lang['values']:
+                self.target_lang.set(self.target_lang['values'][0])
 
     def create_widgets(self):
         # 頂部控制框架（語言切換）
@@ -499,7 +583,7 @@ class App(tk.Tk):
             lang_select_frame,
             values=self.translations[self.current_language.get()]["asr_language_options"]
         )
-        self.asr_lang.set("自動偵測")
+        self.asr_lang.set(self.translations[self.current_language.get()]["asr_language_options"][0])
         self.asr_lang.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
         output_format_frame = ttk.Frame(transcribe_frame)
@@ -837,7 +921,7 @@ class App(tk.Tk):
             lang_select_frame,
             values=self.translations[self.current_language.get()]["asr_language_options"]
         )
-        self.asr_lang.set("自動偵測")
+        self.asr_lang.set(self.translations[self.current_language.get()]["asr_language_options"][0])
         self.asr_lang.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
         # 輸出格式選擇
