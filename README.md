@@ -40,8 +40,9 @@ For translation/summary (optional):
 - **LibreTranslate** (optional): `LIBRETRANSLATE_ENDPOINT`, `LIBRETRANSLATE_API_KEY`
 
 For ASR:
-- `whisper.cpp/` is included in this repo
-- Whisper models live in `whisper.cpp/models/`
+- Windows runtime target: `Const-me/Whisper`
+- macOS runtime target: `whisper.cpp` with `Metal`
+- Whisper GGML models currently live under `whisper.cpp/models/`
 
 Optional:
 - `tkinterdnd2` for drag-and-drop (already in `requirements.txt`)
@@ -57,6 +58,85 @@ Fallback (pip + requirements.txt):
 ```bash
 pip install -r requirements.txt
 ```
+
+## Quick Start: From Clone to First ASR Run
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/etklam/ai-whisper-translator.git
+cd ai-whisper-translator
+```
+
+### 2. Install Python dependencies
+
+```bash
+uv sync
+```
+
+Fallback:
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Run the setup script
+
+Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging/windows/setup-whisper-cpp.ps1
+```
+
+macOS:
+
+```bash
+chmod +x packaging/macos/setup-whisper-cpp.sh
+./packaging/macos/setup-whisper-cpp.sh
+```
+
+During setup:
+- The script shows `Available environments`
+- On Windows, use Up/Down arrows to choose the backend/environment first
+- On macOS, the script builds `whisper.cpp`
+- It shows `Installed models` and `Available download models`
+- On Windows, use Up/Down arrows to choose the Whisper model
+- Missing models are downloaded automatically
+- `.config` is updated with `asr_model_path`, `asr_provider`, `gpu_backend`, and `use_gpu`
+
+Notes:
+- Empty backend input uses the platform default
+- Empty model input uses `base`
+- Windows currently resolves `asr_provider=const_me` in config; full automated `Const-me/Whisper` runtime installation is still being aligned with that project's Visual Studio build flow
+- Windows backend labels:
+  - `CPU (no GPU)`
+  - `CUDA (NVIDIA)`
+  - `Vulkan (AMD)`
+  - `OpenVINO (Intel)`
+- Windows AMD GPU users should choose `Vulkan (AMD)`
+- You can skip prompts with `-Backend <name>` / `--backend <name>` and `--model <name>`
+
+### 4. Start the app
+
+```bash
+uv run ai-whisper-translator
+```
+
+Fallback:
+
+```bash
+python main.py
+```
+
+### 5. Run your first ASR job
+
+1. Add one audio or video file.
+2. Open the ASR section.
+3. Confirm the Whisper model path is filled in.
+4. Set language/output if needed.
+5. Start transcription.
+
+If you only need ASR, you can stop here. Translation can be configured later.
 
 ## Start the App
 
@@ -141,12 +221,14 @@ uv pip install --upgrade yt-dlp
 - Try a smaller model or lower parallel requests
 
 ### Whisper model not found
+- Run the platform setup script again and re-select backend/model
 - Verify model path points to a valid `.bin`
 - Models are in `whisper.cpp/models/`
 
 ### GPU acceleration not working
 - Ensure backend is supported by your hardware
-- Try `auto` or `cpu`
+- On Windows with AMD GPU, use `Vulkan (AMD)`
+- Try `cpu` if GPU init fails
 
 ## Documentation
 

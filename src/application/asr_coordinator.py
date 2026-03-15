@@ -1,6 +1,7 @@
 """ASR Coordinator - Orchestrates audio transcription workflow."""
 
 import logging
+import sys
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -19,6 +20,7 @@ class ASRRequest:
     input_path: str
     output_path: str
     model_path: str
+    asr_provider: str = "auto"
     language: Optional[str] = None
     use_gpu: bool = False
     gpu_backend: str = "auto"
@@ -64,10 +66,11 @@ class ASRCoordinator:
         total = 1  # Single file for now
 
         logger.info(
-            "ASR run started input=%s output=%s model=%s lang=%s gpu=%s backend=%s",
+            "ASR run started input=%s output=%s model=%s provider=%s lang=%s gpu=%s backend=%s",
             request.input_path,
             request.output_path,
             request.model_path,
+            request.asr_provider,
             request.language,
             request.use_gpu,
             request.gpu_backend,
@@ -78,21 +81,28 @@ class ASRCoordinator:
             input_path = ensure_existing_file(request.input_path)
             model_path = ensure_existing_file(request.model_path, allowed_suffixes=(".bin",))
             output_path = ensure_output_file_path(request.output_path)
-            from src.asr.whisper_transcriber import Transcriber
+            from src.infrastructure.asr.providers import create_asr_provider
 
             for attempt in range(request.max_retries + 1):
                 try:
                     logger.debug("ASR attempt=%s/%s", attempt + 1, request.max_retries + 1)
 
-                    # Initialize transcriber
-                    logger.debug("Initializing transcriber model=%s gpu=%s backend=%s",
-                                model_path, request.use_gpu, request.gpu_backend)
-                    with Transcriber(
+                    logger.debug(
+                        "Initializing ASR provider provider=%s model=%s gpu=%s backend=%s",
+                        request.asr_provider,
+                        str(model_path),
+                        request.use_gpu,
+                        request.gpu_backend,
+                    )
+                    provider = create_asr_provider(
+                        provider_name=request.asr_provider,
+                        platform_name=sys.platform,
                         model_path=str(model_path),
                         use_gpu=request.use_gpu,
                         gpu_backend=request.gpu_backend,
-                    ) as transcriber:
-                        # Load model
+                    )
+
+                    if hasattr(provider, "load_model"):
                         self._emit_event(
                             ProgressEvent(
                                 stage="loading_model",
@@ -101,57 +111,55 @@ class ASRCoordinator:
                                 message="Loading Whisper model...",
                             )
                         )
-                        logger.debug("Loading Whisper model...")
-                        transcriber.load_model()
-                        logger.info("Whisper model loaded successfully, runtime_gpu=%s fallback=%s",
-                                   transcriber.runtime_use_gpu, transcriber.used_fallback)
+                        logger.debug("Loading ASR model...")
+                        provider.load_model()
+                        logger.info("ASR model loaded successfully provider=%s", provider.__class__.__name__)
 
-                        # Transcribe
-                        self._emit_event(
-                            ProgressEvent(
-                                stage="transcribing",
-                                current=0,
-                                total=100,
-                                message="Transcribing audio...",
-                            )
+                    self._emit_event(
+                        ProgressEvent(
+                            stage="transcribing",
+                            current=0,
+                            total=100,
+                            message="Transcribing audio...",
                         )
+                    )
 
-                        language = None if request.language == "auto" else request.language
-                        logger.debug("Starting transcription language=%s threads=%s",
-                                    language or "auto", request.n_threads)
-                        segments = transcriber.transcribe_file(
-                            audio_path=str(input_path),
-                            language=language,
-                            n_threads=request.n_threads,
-                            print_progress=False,
+                    language = None if request.language == "auto" else request.language
+                    logger.debug("Starting transcription provider=%s language=%s threads=%s",
+                                provider.__class__.__name__, language or "auto", request.n_threads)
+                    segments = provider.transcribe(
+                        input_path=str(input_path),
+                        language=language,
+                        n_threads=request.n_threads,
+                        print_progress=False,
+                    )
+                    logger.info("Transcription completed segments=%s", len(segments))
+
+                    detected_lang = None
+                    if hasattr(provider, "get_detected_language"):
+                        detected_lang = provider.get_detected_language()
+                    logger.debug("Detected language: %s", detected_lang)
+
+                    self._emit_event(
+                        ProgressEvent(
+                            stage="saving",
+                            current=90,
+                            total=100,
+                            message="Saving transcription...",
                         )
-                        logger.info("Transcription completed segments=%s", len(segments))
+                    )
 
-                        # Get detected language
-                        detected_lang = transcriber.wrapper.get_detected_language(transcriber.ctx)
-                        logger.debug("Detected language: %s", detected_lang)
+                    logger.debug("Saving output format=%s path=%s", request.output_format, output_path)
+                    self._save_output(
+                        segments=segments,
+                        output_path=str(output_path),
+                        format=request.output_format,
+                        language=detected_lang,
+                    )
 
-                        # Format and save output
-                        self._emit_event(
-                            ProgressEvent(
-                                stage="saving",
-                                current=90,
-                                total=100,
-                                message="Saving transcription...",
-                            )
-                        )
-
-                        logger.debug("Saving output format=%s path=%s", request.output_format, output_path)
-                        self._save_output(
-                            segments=segments,
-                            output_path=str(output_path),
-                            format=request.output_format,
-                            language=detected_lang,
-                        )
-
-                        logger.info("ASR transcription successful path=%s", input_path)
-                        successful += 1
-                        break
+                    logger.info("ASR transcription successful path=%s", input_path)
+                    successful += 1
+                    break
 
                 except Exception as exc:
                     logger.warning("ASR attempt %s failed: %s", attempt + 1, exc)
@@ -161,9 +169,9 @@ class ASRCoordinator:
                         raise ExternalServiceError(f"ASR transcription failed: {exc}") from exc
 
         except ImportError as exc:
-            logger.error("Failed to import Transcriber: %s", exc)
+            logger.error("Failed to import ASR provider dependencies: %s", exc)
             raise ExternalServiceError(
-                "Whisper transcriber not available. Please install whisper.cpp library."
+                "ASR provider not available. Please install the required runtime dependencies."
             ) from exc
 
         # Emit completion event

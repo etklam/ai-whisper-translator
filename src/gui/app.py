@@ -1440,6 +1440,7 @@ class App(tk.Tk):
         # 獲取設定
         use_gpu = self.use_gpu_var.get()
         gpu_backend = self.gpu_backend.get()
+        asr_provider = getattr(self, "asr_provider", "auto")
         language = self._resolve_asr_language()
         output_format = self.output_format.get()
         output_path = self._resolve_asr_output_path(audio_path, prefer_source_dir=True)
@@ -1451,6 +1452,7 @@ class App(tk.Tk):
             input_path=audio_path,
             output_path=output_path,
             model_path=model_path,
+            asr_provider=asr_provider,
             language=language,
             use_gpu=use_gpu,
             gpu_backend=gpu_backend,
@@ -1947,6 +1949,7 @@ class App(tk.Tk):
             "use_alt_prompt": bool(self.use_alt_prompt_var.get()),
             "output_to_source": bool(self.output_to_source_var.get()),
             "asr_model_path": self.asr_model_path.get() if hasattr(self, "asr_model_path") else "",
+            "asr_provider": getattr(self, "asr_provider", "auto"),
             "use_gpu": bool(self.use_gpu_var.get()) if hasattr(self, "use_gpu_var") else False,
             "gpu_backend": self.gpu_backend.get() if hasattr(self, "gpu_backend") else "",
             "asr_language": self.asr_lang.get() if hasattr(self, "asr_lang") else "",
@@ -2032,6 +2035,7 @@ class App(tk.Tk):
         if hasattr(self, "asr_model_path") and settings.asr_model_path:
             self.asr_model_path.delete(0, tk.END)
             self.asr_model_path.insert(0, settings.asr_model_path)
+        self.asr_provider = settings.asr_provider or "auto"
         if hasattr(self, "use_gpu_var"):
             self.use_gpu_var.set(settings.use_gpu)
         if hasattr(self, "gpu_backend") and settings.gpu_backend:

@@ -29,6 +29,7 @@ class AppSettings:
     use_alt_prompt: bool = False
     output_to_source: bool = False
     asr_model_path: str = ""
+    asr_provider: str = "auto"
     use_gpu: bool = False
     gpu_backend: str = ""
     asr_language: str = ""

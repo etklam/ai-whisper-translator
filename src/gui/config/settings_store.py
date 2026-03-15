@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from src.application.settings_models import AppSettings
+from src.infrastructure.asr.providers import resolve_asr_provider
 
 
 logger = logging.getLogger(__name__)
@@ -21,13 +22,25 @@ def snapshot_settings(raw_settings: dict) -> AppSettings:
     return AppSettings.from_dict(raw_settings)
 
 
+def build_default_settings(platform_name: str | None = None) -> dict:
+    settings = AppSettings(
+        asr_provider=resolve_asr_provider("auto", platform_name or os.sys.platform)
+    )
+    return settings.to_dict()
+
+
 def load_settings(path: str) -> tuple[AppSettings, str]:
     config_path = Path(path)
     if not config_path.exists():
-        return AppSettings(), ""
+        return AppSettings.from_dict(build_default_settings()), ""
 
     with config_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
+    if isinstance(payload, dict) and not payload.get("asr_provider"):
+        payload = {
+            **build_default_settings(),
+            **payload,
+        }
     settings = AppSettings.from_dict(payload if isinstance(payload, dict) else {})
     legacy_api_key = ""
     if isinstance(payload, dict):
