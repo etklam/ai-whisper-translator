@@ -1,6 +1,6 @@
 # Packaging Notes
 
-This repo includes packaging placeholders and helper scripts.
+This repo includes packaging specs and helper scripts.
 
 ## Supported Entry Points
 
@@ -12,6 +12,25 @@ This repo includes packaging placeholders and helper scripts.
 
 - `packaging/windows/pyinstaller.spec`
 - `packaging/macos/pyinstaller.spec`
+
+## Build Desktop Release
+
+### Windows `.exe`
+
+Run the checked-in release script:
+
+```powershell
+./packaging/windows/build-release.ps1
+```
+
+What it does:
+- runs `uv run --with pyinstaller pyinstaller`
+- builds from `packaging/windows/pyinstaller.spec`
+- bundles Python dependencies used by the app, including `pysrt`, `numpy`, `soundfile`, `yt_dlp`
+- includes `src/translation/prompts.json`
+
+Build output:
+- `dist/ai-whisper-translator/ai-whisper-translator.exe`
 
 ## Build whisper.cpp Shared Library
 
