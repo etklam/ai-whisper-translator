@@ -6,6 +6,7 @@ Orchestrates the audio transcription process using whisper.cpp.
 
 import ctypes
 import json
+import platform
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 import numpy as np
@@ -14,8 +15,9 @@ from src.asr.whisper_wrapper import (
     WhisperWrapper,
     WhisperSegment,
     WhisperSamplingStrategy,
+    default_library_paths,
+    resolve_backend_candidates,
 )
-from src.asr.audio_converter import AudioConverter
 from src.asr.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -48,35 +50,59 @@ class Transcriber:
             self.logger.error(f"Model file not found: {model_path}")
             raise FileNotFoundError(f"Model file not found: {model_path}")
 
-        self.wrapper = WhisperWrapper(library_path=library_path)
+        self.library_path = library_path
+        self.wrapper = None
         self.use_gpu = use_gpu
         self.requested_gpu_backend = gpu_backend
         self.fallback_to_cpu = fallback_to_cpu
         self.used_fallback = False
         self.runtime_use_gpu = use_gpu
+        self.runtime_backend = "cpu"
+        self.runtime_library_path = library_path
         self.ctx = None
         self.logger.debug(
             f"Transcriber initialized with model: {model_path}, GPU: {use_gpu}, backend: {gpu_backend}"
         )
+
+    def _build_wrapper(self, backend: str) -> WhisperWrapper:
+        if self.library_path:
+            self.runtime_library_path = self.library_path
+            return WhisperWrapper(library_path=self.library_path)
+
+        candidates = default_library_paths(platform_name=platform.system().lower(), backend=backend)
+        library_path = candidates[0] if candidates else None
+        self.runtime_library_path = library_path
+        return WhisperWrapper(library_path=library_path)
 
     def load_model(self):
         """Load the whisper model."""
         self.logger.info(
             f"Loading model from: {self.model_path} (requested_backend={self.requested_gpu_backend})"
         )
-        use_gpu = self.use_gpu
-        try:
-            self.ctx = self.wrapper.init_context(str(self.model_path), use_gpu=use_gpu)
-            self.runtime_use_gpu = use_gpu
-        except Exception as e:
-            if use_gpu and self.fallback_to_cpu:
-                self.logger.warning(f"GPU init failed, fallback to CPU: {e}")
-                use_gpu = False
+        backend_candidates = resolve_backend_candidates(
+            platform_name=platform.system().lower(),
+            machine=platform.machine().lower(),
+            requested_backend=self.requested_gpu_backend,
+        )
+
+        last_error = None
+        for index, backend in enumerate(backend_candidates):
+            use_gpu = self.use_gpu and backend != "cpu"
+            try:
+                self.wrapper = self._build_wrapper(backend)
                 self.ctx = self.wrapper.init_context(str(self.model_path), use_gpu=use_gpu)
                 self.runtime_use_gpu = use_gpu
-                self.used_fallback = True
-            else:
-                raise
+                self.runtime_backend = backend
+                self.used_fallback = index > 0
+                break
+            except Exception as e:
+                last_error = e
+                if index == len(backend_candidates) - 1:
+                    raise
+                self.logger.warning("Backend init failed for %s, trying next backend: %s", backend, e)
+        else:
+            raise last_error if last_error is not None else RuntimeError("Failed to load whisper model")
+
         self.logger.info("Model loaded successfully")
         self.logger.debug(f"Whisper version: {self.wrapper.get_version()}")
         self.logger.debug(f"System info: {self.wrapper.get_system_info()}")
@@ -110,6 +136,8 @@ class Transcriber:
         # Convert audio to whisper format
         self.logger.info(f"Processing audio: {audio_path}")
         try:
+            from src.asr.audio_converter import AudioConverter
+
             converter = AudioConverter()
             audio_samples, sr = converter.convert_to_whisper_format(audio_path)
         except Exception as exc:

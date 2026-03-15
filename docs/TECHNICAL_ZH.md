@@ -14,7 +14,9 @@
 ## 1.1 開發進度（截至 2026-03-15）
 
 已完成並可用：
-- whisper.cpp ASR 轉錄
+- ASR provider 分流：
+  - Windows 目標 provider：`Const-me/Whisper`
+  - macOS provider：`whisper.cpp + Metal`
 - OpenAI 相容端點翻譯（預設 Ollama）與 LibreTranslate
 - 摘要功能（ASR 逐字稿摘要）
 - 翻譯批次標記請求
@@ -66,13 +68,16 @@
 
 ### Infrastructure
 - `src/infrastructure/`
+  - `asr/providers.py`：provider 選擇與 factory
+  - `asr/const_me_provider.py`：Windows `Const-me/Whisper` adapter 骨架
+  - `asr/whisper_cpp_provider.py`：macOS `whisper.cpp` adapter
   - `translation/ollama_translation_client.py`：OpenAI 相容端點
   - `translation/libretranslate_client.py`：LibreTranslate
   - `prompt/json_prompt_provider.py`：提示詞 JSON
   - `subtitles/pysrt_subtitle_repository.py`
 
 ### ASR
-- `src/asr/`：whisper.cpp 綁定、轉錄、下載、格式轉換
+- `src/asr/`：`whisper.cpp` 綁定、轉錄、下載、格式轉換
 
 ### GUI
 - `src/gui/app.py`：單頁 UI（左側佇列 / AI 引擎面板切換）
@@ -113,6 +118,8 @@
 - GUI 覆寫：`.config`
 
 ### ASR
+- Windows 預設 provider：`const_me`
+- macOS 預設 provider：`whisper_cpp`
 - whisper.cpp library：`whisper.cpp/build/src/libwhisper.dylib`
 - 模型預設：`whisper.cpp/models/ggml-base.bin`
 - GPU 後端：auto/metal/cuda/hip/vulkan/opencl/cpu
@@ -132,8 +139,9 @@
 
 ## 7. ASR 系統
 
-- whisper.cpp 已內建於專案
-- ctypes 綁定 + runtime manifest
+- Windows runtime 目標為 `Const-me/Whisper`，只支援 Windows
+- macOS runtime 維持 `whisper.cpp + Metal`
+- `whisper.cpp` 仍保留於專案中，供 macOS 路線與共用 GGML 模型使用
 - 音訊轉換：16kHz mono PCM float32
 
 ## 8. 輸出與衝突處理

@@ -14,7 +14,9 @@ This document is for maintainers and contributors.
 ## 1.1 Development Status (2026-03-15)
 
 Implemented and working:
-- ASR transcription via whisper.cpp
+- ASR transcription via provider split:
+  - Windows target provider: `Const-me/Whisper`
+  - macOS provider: `whisper.cpp` with Metal support
 - Translation via OpenAI-compatible endpoints (default Ollama) and LibreTranslate
 - Summary generation from ASR output
 - Batch-tagged translation requests
@@ -59,7 +61,7 @@ High-level flow:
   - `endpoint_policy.py`: normalize + validate OpenAI-compatible endpoints
   - `path_validation.py`: file/path guard layer
   - `translation_coordinator.py`: translation orchestration + retries + batch tagging
-  - `asr_coordinator.py`: ASR orchestration with whisper.cpp
+  - `asr_coordinator.py`: ASR orchestration through provider factory
 
 ### Domain
 - `src/domain/`
@@ -67,6 +69,9 @@ High-level flow:
 
 ### Infrastructure
 - `src/infrastructure/`
+  - `asr/providers.py`: provider resolution and factory
+  - `asr/const_me_provider.py`: Windows `Const-me/Whisper` adapter scaffold
+  - `asr/whisper_cpp_provider.py`: macOS `whisper.cpp` adapter
   - `translation/ollama_translation_client.py`: OpenAI-compatible HTTP client
   - `translation/libretranslate_client.py`: LibreTranslate client
   - `prompt/json_prompt_provider.py`: prompt loading from JSON
@@ -74,8 +79,8 @@ High-level flow:
 
 ### ASR
 - `src/asr/`
-  - `whisper_wrapper.py`: ctypes bindings
-  - `whisper_transcriber.py`: orchestration
+  - `whisper_wrapper.py`: `whisper.cpp` ctypes bindings
+  - `whisper_transcriber.py`: `whisper.cpp` orchestration
   - `audio_downloader.py`: yt-dlp download
   - `audio_converter.py`: ffmpeg/soundfile conversion
 
@@ -120,6 +125,8 @@ High-level flow:
 - GUI prompt overrides stored in `.config`
 
 ### ASR
+- Windows default provider in config: `const_me`
+- macOS default provider in config: `whisper_cpp`
 - Whisper library path: `whisper.cpp/build/src/libwhisper.dylib`
 - Default model path: `whisper.cpp/models/ggml-base.bin`
 - GPU backends: auto/metal/cuda/hip/vulkan/opencl/cpu
@@ -138,10 +145,10 @@ High-level flow:
 - GUI override takes precedence and is stored in `.config`
 - `use_alt_prompt` toggles alternate prompt
 
-## 7. ASR System (Whisper.cpp)
-
-- `whisper.cpp/` bundled in repo
-- Uses ctypes bindings and runtime manifest for GPU backend priority
+## 7. ASR System
+- Windows runtime target is `Const-me/Whisper`, which is Windows-only and DirectCompute/D3D11 based
+- macOS runtime remains `whisper.cpp` with Metal
+- `whisper.cpp/` stays bundled in repo for the macOS path and shared GGML model storage
 - Audio conversion pipeline: ffmpeg → 16kHz mono PCM float32
 
 ## 8. Output and Conflict Handling

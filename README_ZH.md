@@ -40,8 +40,9 @@
 - **LibreTranslate**（可選）：`LIBRETRANSLATE_ENDPOINT`、`LIBRETRANSLATE_API_KEY`
 
 ASR：
-- 專案已包含 `whisper.cpp/`
-- 模型放在 `whisper.cpp/models/`
+- Windows runtime 目標：`Const-me/Whisper`
+- macOS runtime 目標：`whisper.cpp` + `Metal`
+- Whisper GGML 模型目前仍放在 `whisper.cpp/models/`
 
 可選：
 - `tkinterdnd2` 拖放功能（已在 `requirements.txt`）
@@ -57,6 +58,85 @@ uv sync
 ```bash
 pip install -r requirements.txt
 ```
+
+## 快速上手：從 Clone 到第一次 ASR
+
+### 1. Clone 專案
+
+```bash
+git clone https://github.com/etklam/ai-whisper-translator.git
+cd ai-whisper-translator
+```
+
+### 2. 安裝 Python 依賴
+
+```bash
+uv sync
+```
+
+備援：
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3. 執行 setup script
+
+Windows：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging/windows/setup-whisper-cpp.ps1
+```
+
+macOS：
+
+```bash
+chmod +x packaging/macos/setup-whisper-cpp.sh
+./packaging/macos/setup-whisper-cpp.sh
+```
+
+執行 setup 時：
+- script 會顯示 `Available environments`
+- 在 Windows 上可用上下方向鍵先選 backend / 執行環境
+- 在 macOS 上 script 會建置 `whisper.cpp`
+- 顯示 `Installed models` 與 `Available download models`
+- 在 Windows 上可用上下方向鍵選 Whisper model
+- 缺少的 model 會自動下載
+- 自動更新 `.config` 的 `asr_model_path`、`asr_provider`、`gpu_backend`、`use_gpu`
+
+注意：
+- backend 直接按 Enter 會使用平台預設值
+- model 直接按 Enter 會使用 `base`
+- Windows 目前會在 `.config` 寫入 `asr_provider=const_me`；完整的 `Const-me/Whisper` 自動安裝流程仍需依該專案的 Visual Studio build 方式再補齊
+- Windows backend 標籤：
+  - `CPU (no GPU)`
+  - `CUDA (NVIDIA)`
+  - `Vulkan (AMD)`
+  - `OpenVINO (Intel)`
+- Windows 的 AMD GPU 建議選 `Vulkan (AMD)`
+- 可用 `-Backend <name>` / `--backend <name>` 和 `--model <name>` 跳過互動提示
+
+### 4. 啟動程式
+
+```bash
+uv run ai-whisper-translator
+```
+
+備援：
+
+```bash
+python main.py
+```
+
+### 5. 跑第一次 ASR
+
+1. 加入一個音訊或影片檔。
+2. 打開 ASR 區塊。
+3. 確認 Whisper model path 已經填好。
+4. 視需要調整語言與輸出格式。
+5. 開始轉錄。
+
+如果你現在只需要 ASR，到這裡就可以開始用了。翻譯可以之後再設定。
 
 ## 啟動程式
 
@@ -141,12 +221,14 @@ uv pip install --upgrade yt-dlp
 - 嘗試小模型或降低並行數
 
 ### Whisper 模型找不到
+- 重新執行對應平台的 setup script，重新選 backend / model
 - 確認路徑指向有效 `.bin`
 - 模型位於 `whisper.cpp/models/`
 
 ### GPU 加速無法運作
 - 確認後端支援
-- 改用 `auto` 或 `cpu`
+- Windows 的 AMD GPU 請選 `Vulkan (AMD)`
+- 如果 GPU 初始化失敗，先改用 `cpu`
 
 ## 文件
 

@@ -1,3 +1,4 @@
+from src.application.settings_models import AppSettings
 from src.application.models import TranslationRequest
 
 
@@ -9,3 +10,8 @@ def test_translation_request_defaults():
         model_name="m",
     )
     assert req.max_retries == 1
+
+
+def test_app_settings_preserves_asr_provider():
+    settings = AppSettings.from_dict({"asr_provider": "const_me"})
+    assert settings.asr_provider == "const_me"
