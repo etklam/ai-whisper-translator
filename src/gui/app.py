@@ -815,21 +815,24 @@ class App(tk.Tk):
         self.translation_frame.pack(fill=tk.X, pady=(0, 14))
 
         self.enable_translation_var = tk.BooleanVar(value=False)
+        translation_toggle_frame = ttk.Frame(self.translation_frame)
+        translation_toggle_frame.pack(fill=tk.X, padx=6, pady=(4, 4))
+
         self.enable_translation_check = ttk.Checkbutton(
-            self.translation_frame,
+            translation_toggle_frame,
             text=self.get_text("enable_translation"),
             variable=self.enable_translation_var,
             command=self.toggle_translation_options,
         )
-        self.enable_translation_check.pack(anchor="w", padx=6, pady=(4, 2))
+        self.enable_translation_check.pack(side=tk.LEFT, padx=(0, 16))
 
         self.enable_summary_check = ttk.Checkbutton(
-            self.translation_frame,
+            translation_toggle_frame,
             text=self.get_text("enable_summary"),
             variable=self.enable_summary_var,
             command=self.toggle_translation_options,
         )
-        self.enable_summary_check.pack(anchor="w", padx=6, pady=(2, 4))
+        self.enable_summary_check.pack(side=tk.LEFT)
 
         self.translation_options_frame = ttk.Frame(self.translation_frame)
         self.translation_options_frame.pack(fill=tk.X, padx=6, pady=(8, 2))
@@ -843,8 +846,11 @@ class App(tk.Tk):
         control_frame = ttk.Frame(right_frame)
         control_frame.pack(fill=tk.X, pady=(0, 4))
 
+        queue_actions_frame = ttk.Frame(control_frame)
+        queue_actions_frame.pack(fill=tk.X)
+
         self.start_queue_button = ttk.Button(
-            control_frame,
+            queue_actions_frame,
             text=self.get_text("start_queue"),
             command=self.start_queue,
             style="Accent.TButton",
@@ -852,17 +858,21 @@ class App(tk.Tk):
         self.start_queue_button.pack(side=tk.LEFT, padx=(0, 8))
 
         self.stop_queue_button = ttk.Button(
-            control_frame,
+            queue_actions_frame,
             text=self.get_text("stop_queue"),
             command=self.stop_queue,
             style="Subtle.TButton",
         )
         self.stop_queue_button.pack(side=tk.LEFT)
 
+        language_actions_frame = ttk.Frame(control_frame)
+        language_actions_frame.pack(fill=tk.X, pady=(8, 0))
+
         self.lang_button = ttk.Button(
-            control_frame,
+            language_actions_frame,
             text=self.get_text("switch_language"),
             command=self.switch_language,
+            style="Subtle.TButton",
         )
         self.lang_button.pack(side=tk.RIGHT)
 
