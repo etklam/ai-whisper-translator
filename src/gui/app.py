@@ -20,13 +20,11 @@ from src.gui.config.settings_store import (
 )
 from src.gui.presenters.clean_workflow import run_clean_workflow
 from src.gui.presenters.completion_handling import (
-    resolve_file_translation_update,
     resolve_translation_completion,
 )
 from src.gui.presenters.queue_controller import (
     QueueController,
     build_source_queue,
-    pop_next_queue_item,
     queue_status_text,
 )
 from src.gui.presenters.queue_execution import (
@@ -35,6 +33,13 @@ from src.gui.presenters.queue_execution import (
     run_queue_item,
     run_summary_for_output,
     run_translation_for_output,
+)
+from src.gui.presenters.queue_workflow import (
+    handle_queue_item_done,
+    process_next_queue_item,
+    queue_item_label,
+    start_queue_processing,
+    stop_queue_processing,
 )
 from src.gui.presenters.translation_runner import (
     build_translation_request,
@@ -63,15 +68,6 @@ def _build_source_queue(urls, files):
 
 def _parse_urls(text):
     return [line.strip() for line in text.splitlines() if line.strip()]
-
-def _pop_next_queue_item(queue_items):
-    return pop_next_queue_item(queue_items)
-
-def _queue_item_label(item):
-    return f"{item['kind']}: {item['value']}"
-
-def _should_translate(flag):
-    return bool(flag)
 
 def _queue_status_text(current, total, status):
     return queue_status_text(current, total, status)
@@ -119,6 +115,9 @@ class App(tk.Tk):
         self.config_path = default_settings_path()
         self._config_traces_bound = False
         self.queue_controller = QueueController()
+        self.queue_display_items = []
+        self.queue_run_results = []
+        self._queue_run_start_index = 0
 
         self.create_widgets()
         self.create_clean_menu()
@@ -368,14 +367,14 @@ class App(tk.Tk):
         if not self.coordinator:
             raise RuntimeError("Translation coordinator is not configured")
         try:
-            self.coordinator.translation_client = (
+            translation_client = (
                 self.free_translation_client if self.translation_engine_key == "libretranslate" else self._build_ollama_client()
             )
         except Exception as exc:
             logger.warning("Failed to initialize translation client error=%s", exc)
             messagebox.showwarning(self.get_text("warning"), str(exc))
             return False
-        self.coordinator.prompt_provider = self._build_prompt_provider()
+        prompt_provider = self._build_prompt_provider()
         request = self._build_translation_request(file_paths)
         logger.info(
             "Dispatching coordinator request files=%s source=%s target=%s model=%s parallel=%s clean=%s replace=%s alt_prompt=%s engine=%s",
@@ -389,7 +388,13 @@ class App(tk.Tk):
             request.use_alt_prompt,
             self.translation_engine_key,
         )
-        run_translation_request(self.coordinator, request, done_callback=done_callback)
+        run_translation_request(
+            self.coordinator,
+            request,
+            done_callback=done_callback,
+            translation_client=translation_client,
+            prompt_provider=prompt_provider,
+        )
         return True
 
     def _default_summary_prompt(self, language: str | None = None) -> str:
@@ -1252,8 +1257,9 @@ class App(tk.Tk):
         logger.debug("Parsed URLs count=%s", len(url_list))
         for item in _build_source_queue(url_list, []):
             self.queue_controller.add_item(item)
-            self.queue_list.insert(tk.END, _queue_item_label(item))
-            logger.debug("URL added to queue: %s", item["value"])
+            self.queue_display_items.append(item)
+            self.queue_list.insert(tk.END, queue_item_label(self, item))
+            logger.debug("URL added to queue: %s", item.value)
         self.url_text.delete("1.0", tk.END)
         logger.info("URLs added to queue count=%s", len(url_list))
 
@@ -1271,46 +1277,24 @@ class App(tk.Tk):
             return
         for item in _build_source_queue([], file_paths):
             self.queue_controller.add_item(item)
-            self.queue_list.insert(tk.END, _queue_item_label(item))
-            logger.debug("Audio file added to queue: %s", item["value"])
+            self.queue_display_items.append(item)
+            self.queue_list.insert(tk.END, queue_item_label(self, item))
+            logger.debug("Audio file added to queue: %s", item.value)
         logger.debug("Audio files selected count=%s", len(file_paths))
 
     def clear_queue(self):
         self.queue_list.delete(0, tk.END)
         self.queue_controller.clear()
+        self.queue_display_items = []
+        self.queue_run_results = []
+        self._queue_run_start_index = 0
         logger.debug("Queue cleared")
 
     def start_queue(self):
-        logger.info("Start queue requested")
-        if self.queue_controller.is_running:
-            logger.warning("Queue already running, ignoring start request")
-            return
-        if _should_translate(self.enable_translation_var.get()):
-            if not self._validate_translation_settings():
-                return
-        if hasattr(self, "translation_prompt_text"):
-            self._set_translation_prompt_for_language(
-                self.current_language.get(),
-                self.translation_prompt_text.get("1.0", tk.END),
-            )
-        if hasattr(self, "summary_prompt_text"):
-            self._set_summary_prompt_for_language(
-                self.current_language.get(),
-                self.summary_prompt_text.get("1.0", tk.END),
-            )
-        if self.url_text.get("1.0", tk.END).strip():
-            logger.debug("Adding pending URLs before starting queue")
-            self.add_urls_to_queue()
-        if not self.queue_controller.start():
-            logger.warning("Queue is empty, cannot start")
-            messagebox.showwarning(self.get_text("notice"), self.get_text("queue_empty"))
-            return
-        logger.info("Starting queue processing total_items=%s", self.queue_controller.total)
-        self._process_next_queue_item()
+        start_queue_processing(self)
 
     def stop_queue(self):
-        logger.info("Stop queue requested")
-        self.queue_controller.stop()
+        stop_queue_processing(self)
 
     def browse_output_dir(self):
         directory = filedialog.askdirectory(title=self.get_text("choose_output_folder"))
@@ -1337,22 +1321,10 @@ class App(tk.Tk):
             logger.debug("Output directory selected: %s", directory)
 
     def _process_next_queue_item(self):
-        if not self.queue_controller.is_running:
-            logger.debug("Queue processing stopped by user")
-            return
-        next_item = self.queue_controller.next_item()
-        if next_item is None:
-            self.status_label.config(text=self.get_text("queue_done"))
-            logger.info("Queue processing completed")
-            return
-        current_index, remaining, item = next_item
-        logger.debug("Processing queue item index=%s/%s remaining=%s kind=%s",
-                     current_index, self.queue_controller.total, remaining, item.get("kind"))
-        self.status_label.config(text=_queue_status_text(current_index, self.queue_controller.total, self.get_text("queue_processing")))
-        self._run_queue_item(item, current_index)
+        process_next_queue_item(self)
 
     def _run_queue_item(self, item, index):
-        logger.debug("Queue item execution started index=%s kind=%s", index, item["kind"])
+        logger.debug("Queue item execution started index=%s kind=%s", index, item.kind)
         run_queue_item(self, item, index)
 
     def _run_asr_request(self, audio_path, output_path):
@@ -1367,16 +1339,8 @@ class App(tk.Tk):
     def _run_summary_for_output(self, output_path, index):
         run_summary_for_output(self, output_path, index)
 
-    def _on_queue_item_done(self, index, success, message):
-        if success:
-            self.status_label.config(text=_queue_status_text(index, self.queue_controller.total, self.get_text("queue_done")))
-        else:
-            self.status_label.config(
-                text=f"{_queue_status_text(index, self.queue_controller.total, self.get_text('queue_failed'))}: {message}"
-            )
-
-        if self.queue_controller.is_running:
-            self._process_next_queue_item()
+    def _on_queue_item_done(self, result):
+        handle_queue_item_done(self, result)
 
     # ========== ASR Methods ==========
     def select_audio(self):
@@ -1415,6 +1379,9 @@ class App(tk.Tk):
 
         self.status_label.config(text=self.get_text("status_downloading"))
 
+        def _show_download_error(error_msg):
+            self._show_download_error(error_msg)
+
         def download_thread():
             """Download audio in background thread."""
             try:
@@ -1440,17 +1407,17 @@ class App(tk.Tk):
                     self.after(0, lambda: update_error(self.get_text("download_failed")))
             except Exception as e:
                 error_msg = str(e)
-                self.after(0, lambda: self._show_download_error(error_msg))
-
-        def _show_download_error(self, error_msg):
-            """Show download error in main thread."""
-            messagebox.showerror(self.get_text("error"), self.get_text("download_failed_detail").format(error_msg))
-            self.status_label.config(text=self.get_text("status_download_failed"))
-            logger.error("YouTube download error: %s", error_msg)
+                self.after(0, lambda: _show_download_error(error_msg))
 
         # Start download in background thread
         thread = threading.Thread(target=download_thread, daemon=True)
         thread.start()
+
+    def _show_download_error(self, error_msg):
+        """Show download error in main thread."""
+        messagebox.showerror(self.get_text("error"), self.get_text("download_failed_detail").format(error_msg))
+        self.status_label.config(text=self.get_text("status_download_failed"))
+        logger.error("YouTube download error: %s", error_msg)
 
     def start_asr(self):
         """開始 ASR 轉錄"""
@@ -1475,7 +1442,7 @@ class App(tk.Tk):
         gpu_backend = self.gpu_backend.get()
         language = self._resolve_asr_language()
         output_format = self.output_format.get()
-        output_path = self.asr_output_path.get()
+        output_path = self._resolve_asr_output_path(audio_path, prefer_source_dir=True)
 
         # 建立請求
         from src.application.asr_coordinator import ASRRequest
@@ -1700,7 +1667,6 @@ class App(tk.Tk):
             self.status_label.config(
                 text=_queue_status_text(index, self.queue_controller.total, self.get_text("queue_done"))
             )
-            self.file_translated(f"翻譯完成 | 檔案已成功保存為: {actual_output_path}")
         else:
             self.status_label.config(
                 text=f"{_queue_status_text(index, self.queue_controller.total, self.get_text('queue_failed'))}: {actual_output_path}"
@@ -1718,9 +1684,14 @@ class App(tk.Tk):
             summary,
             auto_clean_workspace=self.auto_clean_workspace_var.get(),
             get_text=self.get_text,
+            file_paths=self._file_list_paths(),
         )
         if completion_state.clear_workspace:
             self.file_list.delete(0, tk.END)
+        elif completion_state.remove_indices:
+            for remove_index in completion_state.remove_indices:
+                if 0 <= remove_index < self.file_list.size():
+                    self.file_list.delete(remove_index)
         self.status_label.config(text=completion_state.status_text)
         if completion_state.reset_progress:
             self.progress_bar["value"] = 0
@@ -1783,31 +1754,6 @@ class App(tk.Tk):
             )
             logger.debug("Progress updated current=%s total=%s percentage=%s", current, total, percentage)
             self.update_idletasks()
-
-    def file_translated(self, message):
-        """處理檔案翻譯完成的回調"""
-        logger.debug("File translated callback message=%s", message)
-        update = resolve_file_translation_update(
-            message=message,
-            current_status_text=self.status_label.cget("text"),
-            file_paths=self._file_list_paths(),
-            auto_clean_workspace=self.auto_clean_workspace_var.get(),
-            get_text=self.get_text,
-        )
-        self.status_label.config(text=update.appended_status_text)
-        if update.remove_index is not None:
-            removed_path = self.file_list.get(update.remove_index)
-            logger.info("Removing completed file from list index=%s path=%s", update.remove_index, removed_path)
-            self.file_list.delete(update.remove_index)
-        if update.final_status_text is not None:
-            self.status_label.config(text=update.final_status_text)
-        if update.reset_progress:
-            self.progress_bar["value"] = 0
-        if update.dialog_text is not None:
-            messagebox.showinfo(
-                self.get_text("confirm"),
-                update.dialog_text,
-            )
 
     def show_context_menu(self, event):
         """顯示右鍵選單"""

@@ -24,6 +24,8 @@ Implemented and working:
 - Config persistence in `.config`
 - Typed settings store and extracted GUI presenters
 - Local-first endpoint policy and filesystem validation
+- Structured workflow results for translation and queue execution
+- Typed queue inputs and truthful queue item states in the UI
 
 In progress / next focus:
 - Packaging for macOS/Windows
@@ -44,14 +46,15 @@ Startup path:
 
 High-level flow:
 - GUI collects input and options.
-- GUI presenters build `TranslationRequest` and run coordinator asynchronously.
+- GUI presenters build typed workflow requests and run coordinators asynchronously.
 - Translation, ASR, queue, completion, and clean workflows are split into focused helpers.
+- Queue execution reports structured `QueueItemResult` objects instead of relying on status-string parsing.
 
 ## 3. Module Responsibilities
 
 ### Application
 - `src/application/`
-  - `models.py`: request models (`TranslationRequest`, `ASRRequest`)
+  - `models.py`: request/result models (`TranslationRequest`, `ExecutionSummary`, `QueueItemResult`, `SourceQueueItem`)
   - `events.py`: progress events (`ProgressEvent`)
   - `endpoint_policy.py`: normalize + validate OpenAI-compatible endpoints
   - `path_validation.py`: file/path guard layer
@@ -80,25 +83,31 @@ High-level flow:
 - `src/gui/app.py`: Tkinter single-page UI
   - Left: queue (or AI Engine panel)
   - Right: ASR + Translation + Output settings
-- `src/gui/presenters/`: queue, translation runner, completion handling, clean workflow, UI language
+- `src/gui/presenters/`: queue workflow, queue execution, translation runner, completion handling, clean workflow, UI language
 - `src/gui/views/`: focused widget-construction modules
 - `src/gui/config/settings_store.py`: typed settings IO boundary
 - `src/gui/resources/i18n.py`: translation loading
 
+### Utilities
+- `src/utils/srt_io.py`: SRT read/write boundary using standard file IO around `pysrt`
+
 ## 4. End-to-End Flows
 
-### Queue (ASR → Optional Summary → Optional Translation)
+### Queue (ASR → Optional Translation → Optional Summary)
 
 1. User adds audio/video files or YouTube URLs.
 2. GUI resolves output path + runs ASR request.
-3. If enabled, summary is generated into `*.summary.txt`.
-4. If enabled, translation is run on the output SRT.
+3. If enabled, translation runs on the output SRT and returns structured per-file results.
+4. If enabled, summary is generated into `*.summary.txt`.
+5. Queue item is marked complete only after all enabled stages finish.
+6. Queue list shows pending / processing / done / failed per item.
 
 ### Translation (Coordinator Path)
 
 - GUI builds `TranslationRequest` with UI language.
 - Coordinator performs batch-tagged requests to OpenAI-compatible endpoint.
 - Retries on `ExternalServiceError`.
+- Completion returns `ExecutionSummary` with per-file `file_results`, not just aggregate counts.
 
 ## 5. Configuration and Defaults
 
@@ -138,6 +147,7 @@ High-level flow:
 ## 8. Output and Conflict Handling
 
 - Translation output naming via `src/utils/file_utils.py`
+- SRT loading/saving goes through `src/utils/srt_io.py`
 - Replace mode backs up original into `backup/`
 - Coordinator owns output conflict resolution; default policy is rename
 - Path validation runs before backup/save operations
@@ -146,7 +156,8 @@ High-level flow:
 
 - API failures are wrapped as `ExternalServiceError`
 - Coordinator retries service failures (`max_retries`)
-- Summary generation logs errors and continues queue
+- Summary generation returns a failed queue stage and preserves earlier outputs
+- Auto-clean removes only successful translation inputs on partial success
 
 ## 10. Testing
 

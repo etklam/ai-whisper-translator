@@ -25,11 +25,11 @@ src/
 ├── gui/                     # Tkinter UI
 │   ├── app.py               # Main UI shell and widget event handlers
 │   ├── config/              # Settings persistence
-│   ├── presenters/          # Queue, language, completion, cleaning, translation runners
+│   ├── presenters/          # Queue workflow/execution, language, completion, cleaning, translation runners
 │   ├── resources/           # I18n resources and loaders
 │   └── views/               # Focused panel builders
 ├── application/             # Orchestration layer
-│   ├── models.py            # Request dataclasses
+│   ├── models.py            # Typed workflow request/result dataclasses
 │   ├── events.py            # Progress events
 │   ├── endpoint_policy.py   # Local-first endpoint trust policy
 │   ├── path_validation.py   # Filesystem guard layer
@@ -42,17 +42,19 @@ src/
 │   └── subtitles/           # Pysrt repository
 ├── asr/                     # whisper.cpp integration + audio pipeline
 ├── translation/             # Prompt resources
-└── utils/                   # File utils, naming, cleanup
+└── utils/                   # File utils, naming, cleanup, SRT IO
 ```
 
 ## Key Files
 
 - `src/gui/app.py`: GUI shell and widget wiring
-- `src/gui/presenters/`: extracted GUI workflow logic
+- `src/gui/presenters/`: extracted GUI workflow logic and queue orchestration
 - `src/translation/prompts.json`: default + per-language prompts
+- `src/utils/srt_io.py`: standard-IO boundary around `pysrt`
 - `.config` (repo root): GUI settings and prompt overrides, excluding API secrets
 
 ## Notes
 
 - `src/application/translation_coordinator.py` is the single production translation path.
+- Queue input/output contracts are typed (`SourceQueueItem`, `QueueItemResult`, `ExecutionSummary`).
 - `src/*.ts` files are scaffolding and not part of the runtime.

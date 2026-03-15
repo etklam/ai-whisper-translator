@@ -24,6 +24,8 @@
 - `.config` 設定持久化
 - typed settings store 與 GUI presenter 拆分
 - local-first endpoint policy 與 filesystem validation
+- translation 與 queue workflow 的 structured result
+- typed queue input 與真實佇列狀態顯示
 
 進行中 / 下一步：
 - macOS/Windows 打包
@@ -44,14 +46,15 @@
 
 高層流程：
 - GUI 收集輸入與設定
-- GUI presenter 建立 `TranslationRequest` 並以 async 方式執行 coordinator
+- GUI presenter 建立 typed workflow request 並以 async 方式執行 coordinator
 - translation / queue / clean / completion workflow 已拆成獨立 helper
+- 佇列完成事件使用 `QueueItemResult` 等結構化結果，不再依賴狀態字串解析
 
 ## 3. 模組職責
 
 ### Application
 - `src/application/`
-  - `models.py`：請求模型（`TranslationRequest`, `ASRRequest`）
+  - `models.py`：請求/結果模型（`TranslationRequest`, `ExecutionSummary`, `QueueItemResult`, `SourceQueueItem`）
   - `events.py`：進度事件
   - `endpoint_policy.py`：OpenAI 相容端點正規化與信任政策
   - `path_validation.py`：檔案/路徑驗證
@@ -73,25 +76,31 @@
 
 ### GUI
 - `src/gui/app.py`：單頁 UI（左側佇列 / AI 引擎面板切換）
-- `src/gui/presenters/`：佇列、translation runner、completion、clean workflow、語言切換
+- `src/gui/presenters/`：queue workflow、queue execution、translation runner、completion、clean workflow、語言切換
 - `src/gui/views/`：分離的 panel 建構
 - `src/gui/config/settings_store.py`：typed settings IO
 - `src/gui/resources/i18n.py`：語系資源載入
 
+### Utils
+- `src/utils/srt_io.py`：以標準檔案 IO 包住 `pysrt` 的 SRT 讀寫邊界
+
 ## 4. 端到端流程
 
-### 佇列（ASR → 摘要 → 翻譯）
+### 佇列（ASR → 翻譯 → 摘要）
 
 1. 加入音訊/影片檔或 YouTube URL
 2. 執行 ASR 產出 SRT
-3. （可選）摘要產出 `.summary.txt`
-4. （可選）翻譯 SRT
+3. （可選）翻譯 SRT，並回傳 per-file 結果
+4. （可選）摘要產出 `.summary.txt`
+5. 所有啟用階段都完成後，佇列項目才會標記完成
+6. 佇列列表會呈現 waiting / processing / done / failed
 
 ### 翻譯（Coordinator）
 
 - GUI 建立 `TranslationRequest`
 - coordinator 執行批次標記翻譯
 - `ExternalServiceError` 觸發重試
+- 完成時回傳 `ExecutionSummary.file_results`，不只回傳 aggregate count
 
 ## 5. 設定與預設值
 
@@ -130,6 +139,7 @@
 ## 8. 輸出與衝突處理
 
 - `src/utils/file_utils.py` 計算輸出路徑
+- SRT 讀寫統一由 `src/utils/srt_io.py` 處理
 - Replace 模式會備份到 `backup/`
 - coordinator 統一處理輸出衝突；預設策略為 rename
 - 備份與寫檔前會先經過 path validation
@@ -138,7 +148,8 @@
 
 - API 失敗轉為 `ExternalServiceError`
 - coordinator 只對服務錯誤重試
-- 摘要失敗會記錄並繼續佇列
+- 摘要失敗會以 failed stage 回報，並保留先前已產出的檔案
+- partial success 時 auto-clean 只移除成功項目，失敗項目保留供重試
 
 ## 10. 測試
 

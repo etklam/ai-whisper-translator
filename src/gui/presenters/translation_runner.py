@@ -28,7 +28,23 @@ def build_translation_request(
     )
 
 
-def run_translation_request(coordinator, request: TranslationRequest, *, done_callback=None):
+def run_translation_request(
+    coordinator,
+    request: TranslationRequest,
+    *,
+    done_callback=None,
+    translation_client=None,
+    prompt_provider=None,
+):
     if coordinator is None:
         raise RuntimeError("Translation coordinator is not configured")
-    return coordinator.run_async(request, callback=done_callback)
+    runtime_kwargs = {}
+    if translation_client is not None:
+        runtime_kwargs["translation_client"] = translation_client
+    if prompt_provider is not None:
+        runtime_kwargs["prompt_provider"] = prompt_provider
+    return coordinator.run_async(
+        request,
+        callback=done_callback,
+        **runtime_kwargs,
+    )

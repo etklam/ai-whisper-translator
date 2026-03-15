@@ -1,12 +1,14 @@
 import threading
 
+from src.application.models import SourceQueueItem
+
 
 def build_source_queue(urls, files):
     queue = []
     for url in urls:
-        queue.append({"kind": "url", "value": url})
+        queue.append(SourceQueueItem(kind="url", value=url))
     for path in files:
-        queue.append({"kind": "file", "value": path})
+        queue.append(SourceQueueItem(kind="file", value=path))
     return queue
 
 

@@ -2,27 +2,17 @@ import logging
 import os
 import shutil
 import threading
-from dataclasses import dataclass
 from pathlib import Path
 import re
 
-import pysrt
-
 from src.application.events import ProgressEvent
+from src.application.models import ExecutionSummary, TranslationFileResult
 from src.application.path_validation import ensure_existing_file, ensure_output_file_path
 from src.domain.errors import ExternalServiceError
+from src.utils.srt_io import load_srt, save_srt
 from src.utils.file_utils import ensure_backup_dir
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ExecutionSummary:
-    total_files: int
-    successful_files: int
-    failed_files: int
-    output_paths: list[str]
-
 
 class TranslationCoordinator:
     def __init__(self, subtitle_repo, translation_client, prompt_provider, event_sink=None):
@@ -38,10 +28,13 @@ class TranslationCoordinator:
             bool(event_sink),
         )
 
-    def run(self, request):
+    def run(self, request, *, translation_client=None, prompt_provider=None):
+        translation_client = translation_client or self.translation_client
+        prompt_provider = prompt_provider or self.prompt_provider
         successful = 0
         failed = 0
         output_paths = []
+        file_results = []
         total = len(request.file_paths)
         logger.info(
             "Coordinator run started total_files=%s target_lang=%s model=%s retries=%s",
@@ -52,11 +45,13 @@ class TranslationCoordinator:
         )
         for index, file_path in enumerate(request.file_paths, start=1):
             logger.debug("Processing file index=%s/%s path=%s", index, total, file_path)
-            system_prompt = self.prompt_provider.get_prompt(
+            system_prompt = prompt_provider.get_prompt(
                 use_alt_prompt=request.use_alt_prompt,
                 language=request.ui_language,
             )
             file_failed = False
+            saved_output_path = None
+            failure_message = None
 
             try:
                 source_path = ensure_existing_file(file_path, allowed_suffixes=(".srt",))
@@ -77,7 +72,7 @@ class TranslationCoordinator:
                     shutil.copy2(str(source_path), backup_path)
                     logger.debug("Backup created for replace mode source=%s backup=%s", source_path, backup_path)
 
-                subs = pysrt.open(str(source_path))
+                subs = load_srt(source_path)
                 logger.info(
                     "Translating subtitles file=%s count=%s parallel=%s",
                     source_path,
@@ -105,10 +100,11 @@ class TranslationCoordinator:
                                 target_lang=request.target_lang,
                                 model_name=request.model_name,
                                 system_prompt=system_prompt,
+                                translation_client=translation_client,
                             )
                             if translated_batch is None:
                                 translated_batch = [
-                                    self.translation_client.translate_text(
+                                    translation_client.translate_text(
                                         text=single,
                                         source_lang=request.source_lang,
                                         target_lang=request.target_lang,
@@ -157,19 +153,36 @@ class TranslationCoordinator:
                         logger.info("Skipping save for file=%s due to output policy=%s", source_path, request.output_conflict_policy)
                     else:
                         safe_output_path = ensure_output_file_path(output_path, allowed_parent=source_path.parent)
-                        subs.save(str(safe_output_path), encoding="utf-8")
-                        output_paths.append(str(safe_output_path))
+                        save_srt(subs, safe_output_path, encoding="utf-8")
+                        saved_output_path = str(safe_output_path)
+                        output_paths.append(saved_output_path)
                         logger.info("Saved translated file source=%s output=%s", source_path, safe_output_path)
                 else:
                     logger.warning("Skipping save for file=%s due to translation failures", source_path)
-            except Exception:
+            except Exception as exc:
                 file_failed = True
+                failure_message = str(exc)
                 logger.exception("File translation failed path=%s", file_path)
 
             if file_failed:
                 failed += 1
+                file_results.append(
+                    TranslationFileResult(
+                        source_path=str(file_path),
+                        success=False,
+                        output_path=saved_output_path,
+                        error_message=failure_message or "Translation failed",
+                    )
+                )
             else:
                 successful += 1
+                file_results.append(
+                    TranslationFileResult(
+                        source_path=str(file_path),
+                        success=True,
+                        output_path=saved_output_path,
+                    )
+                )
 
             if self.event_sink:
                 self.event_sink(
@@ -192,6 +205,7 @@ class TranslationCoordinator:
             successful_files=successful,
             failed_files=failed,
             output_paths=output_paths,
+            file_results=file_results,
         )
         logger.info(
             "Coordinator run completed total=%s successful=%s failed=%s",
@@ -201,9 +215,9 @@ class TranslationCoordinator:
         )
         return summary
 
-    def _translate_batch(self, texts, source_lang, target_lang, model_name, system_prompt):
+    def _translate_batch(self, texts, source_lang, target_lang, model_name, system_prompt, translation_client):
         if len(texts) == 1:
-            translated = self.translation_client.translate_text(
+            translated = translation_client.translate_text(
                 text=texts[0],
                 source_lang=source_lang,
                 target_lang=target_lang,
@@ -213,7 +227,7 @@ class TranslationCoordinator:
             return [translated]
 
         prompt_text = self._build_tagged_prompt(texts)
-        response = self.translation_client.translate_text(
+        response = translation_client.translate_text(
             text=prompt_text,
             source_lang=source_lang,
             target_lang=target_lang,
@@ -256,10 +270,14 @@ class TranslationCoordinator:
             return None
         return results
 
-    def run_async(self, request, callback=None):
+    def run_async(self, request, callback=None, *, translation_client=None, prompt_provider=None):
         def _run():
             logger.debug("Async run thread started")
-            summary = self.run(request)
+            summary = self.run(
+                request,
+                translation_client=translation_client,
+                prompt_provider=prompt_provider,
+            )
             if callback:
                 logger.debug("Invoking async callback")
                 callback(summary)
